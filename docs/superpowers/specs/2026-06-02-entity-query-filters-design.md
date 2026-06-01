@@ -196,13 +196,16 @@ query fragments. Because the AST is closed, the compiler forces every node type 
 handled.
 
 - **Postgres** → `WHERE` clause with bind params. `Gt` on a data path →
-  `(data#>>'{total}')::numeric > $1`; `Membership` → `… = ANY($1)`;
-  `Conjunction`/`Disjunction` → `AND`/`OR` groups; `Negation` → `NOT (...)`;
-  `Existence` → `data ? 'key'` / `IS NULL`. Requires the `data` column typed as
-  `jsonb`.
-- **Mongo** → `bson.D`. `Eq` → `{path: v}`; `Gt` → `{path: {$gt: v}}`;
-  `In` → `{path: {$in: […]}}`; `And`/`Or` → `$and`/`$or`; `Not` → `$not`/`$nor`;
-  `Existence` → `{path: {$exists: b}}`.
+  `(data#>>'{total}')::numeric > $1` (wrapped per the null-semantics contract below);
+  `Membership` → `<col> IN ($1, $2, …)` (empty → `FALSE`);
+  `Conjunction`/`Disjunction` → parenthesized `AND`/`OR` groups (empty → `TRUE`/`FALSE`);
+  `Negation` → `NOT (...)`; `Existence` → `IS NOT NULL` / `IS NULL`. Requires the
+  `data` column typed as `jsonb`.
+- **Mongo** → `bson.D`, one uniform operator doc per comparison. `Eq` →
+  `{path: {$eq: v}}`; `Gt` → `{path: {$gt: v}}`; `In` → `{path: {$in: […]}}`;
+  `And`/`Or` → `$and`/`$or` (empty → `{}` / `{$nor: [{}]}`); `Not` → `$nor` (top-level
+  negation; `$not` is field-level only); `Ne` and `Existence` follow the null-semantics
+  contract below.
 - **Dynamo** → `FilterExpression` string plus `ExpressionAttributeNames`/`Values`, run
   as a `Scan` (or a `Query` when the filter pins the partition key). Comparisons, `IN`,
   `attribute_exists`, `AND`/`OR`/`NOT` map directly.
@@ -226,6 +229,38 @@ Callers get a typed, checkable failure rather than a malformed query.
 - **Value types:** filter values are restricted to a documented set — strings,
   ints/floats, bools, and `time.Time` — so each backend has a well-defined binding.
   Anything else → `ErrUnsupportedFilter`.
+
+## Null and missing-path semantics (two-valued contract)
+
+Backends must produce the **same result set for the same filter**, so missing/null
+paths follow one explicit rule (two-valued boolean logic, not SQL three-valued):
+
+> A leaf path predicate (`Comparison`, `Membership`) is satisfied **only when the
+> referenced path is present, non-null, and the comparison holds**. A missing or
+> null path makes that leaf `false`. `And`/`Or`/`Not` combine these leaves as
+> ordinary booleans. `Exists(p, true)` is satisfied iff `p` is present and non-null;
+> `Exists(p, false)` is its complement (absent **or** null).
+
+Consequences (identical on every backend):
+
+- `Ne(p, x)` does **not** match entities where `p` is missing or null. To include
+  them, use `Or(Ne(p, x), Exists(p, false))`.
+- `Not(Eq(p, x))` **does** match entities where `p` is missing or null — it is the
+  honest complement of a `false` leaf, not SQL `NOT(NULL)`.
+
+This is observable only under negation: for any `Not`-free filter, two-valued and
+three-valued logic yield the same rows. The rule is enforced in translation:
+
+- **Postgres** — non-reserved (jsonb) comparison/membership leaves are guarded so
+  they evaluate to a strict boolean:
+  `(data#>>'{p}' IS NOT NULL AND <comparison>)`. A `null` jsonb value and an absent
+  key both extract to SQL `NULL`, so the guard treats them identically (present and
+  non-null). Reserved columns (`id`/`type`/`version`) are `NOT NULL` by schema and
+  are not guarded. `Exists` true → `IS NOT NULL`, false → `IS NULL`.
+- **Mongo** — `Ne` → `{path: {$nin: [null, v]}}` (excludes missing, null, and `v`);
+  `Eq`/`Gt`/`Gte`/`Lt`/`Lte`/`In` already exclude missing/null natively;
+  `Exists` true → `{path: {$ne: null}}`, false → `{path: {$eq: null}}`
+  (both treat a missing field as null, matching Postgres).
 
 ## Extensibility (deferred work)
 
