@@ -3,6 +3,7 @@ package ember
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -30,6 +31,17 @@ func (fakeMarshaler) Unmarshal(_ context.Context, m *MarshaledEntity) (*fakeEnti
 	e.Name = string(m.Data)
 	e.SetVersion(m.Version)
 	return e, nil
+}
+
+// failingMarshaler errors on Unmarshal to exercise List's per-item error branch.
+type failingMarshaler struct{}
+
+func (failingMarshaler) Marshal(_ context.Context, e *fakeEntity) (*MarshaledEntity, error) {
+	return nil, nil
+}
+
+func (failingMarshaler) Unmarshal(_ context.Context, _ *MarshaledEntity) (*fakeEntity, error) {
+	return nil, errors.New("unmarshal boom")
 }
 
 // fakeRepo records calls and returns canned results.
@@ -70,7 +82,7 @@ func TestEntityStoreList(t *testing.T) {
 	if repo.gotType != "fake" {
 		t.Errorf("repo received type %q, want %q", repo.gotType, "fake")
 	}
-	if repo.gotFilter != f {
+	if !reflect.DeepEqual(repo.gotFilter, f) {
 		t.Errorf("repo received filter %#v, want %#v", repo.gotFilter, f)
 	}
 	if len(got) != 2 {
@@ -78,6 +90,9 @@ func TestEntityStoreList(t *testing.T) {
 	}
 	if got[0].ID() != "1" || got[0].Name != "alice" {
 		t.Errorf("entity[0] = %+v, want id=1 name=alice", got[0])
+	}
+	if got[1].ID() != "2" || got[1].Name != "bob" {
+		t.Errorf("entity[1] = %+v, want id=2 name=bob", got[1])
 	}
 }
 
@@ -89,6 +104,21 @@ func TestEntityStoreListError(t *testing.T) {
 	_, err := store.List(context.Background(), nil)
 	if !errors.Is(err, sentinel) {
 		t.Errorf("got error %v, want %v", err, sentinel)
+	}
+}
+
+func TestEntityStoreListUnmarshalError(t *testing.T) {
+	repo := &fakeRepo{listResult: []*MarshaledEntity{
+		{ID: "1", Type: "fake", Version: NewVersion(1), Data: []byte("alice")},
+	}}
+	store := NewEntityStore[*fakeEntity](repo, failingMarshaler{})
+
+	got, err := store.List(context.Background(), nil)
+	if err == nil {
+		t.Fatal("List should return error when Unmarshal fails")
+	}
+	if got != nil {
+		t.Errorf("List should return nil slice on error, got %#v", got)
 	}
 }
 
