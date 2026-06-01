@@ -43,6 +43,7 @@ func TestBuildWhere(t *testing.T) {
 		{"in numeric cast", ember.In("price", 100, 200), "data#>>'{price}' IS NOT NULL AND (data#>>'{price}')::numeric IN ($1, $2)", []any{100, 200}},
 		{"time normalized to rfc3339nano", ember.Eq("createdAt", time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)), "data#>>'{createdAt}' IS NOT NULL AND data#>>'{createdAt}' = $1", []any{"2024-01-02T03:04:05Z"}},
 		{"not of and", ember.Not(ember.And(ember.Eq("a", "1"), ember.Eq("b", "2"))), "NOT ((data#>>'{a}' IS NOT NULL AND data#>>'{a}' = $1) AND (data#>>'{b}' IS NOT NULL AND data#>>'{b}' = $2))", []any{"1", "2"}},
+		{"ne reserved version", ember.Ne("version", 5), "version <> $1", []any{5}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

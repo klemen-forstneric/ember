@@ -152,8 +152,6 @@ func sqlOp(op ember.Operator) (string, error) {
 	case ember.OpEq:
 		return "=", nil
 	case ember.OpNe:
-		// Note: for jsonb data paths an absent key extracts to SQL NULL, so <>
-		// (and all comparisons) silently exclude rows where the key is missing.
 		return "<>", nil
 	case ember.OpGt:
 		return ">", nil

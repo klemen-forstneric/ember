@@ -106,6 +106,8 @@ func mongoOp(op ember.Operator) (string, error) {
 	case ember.OpEq:
 		return "$eq", nil
 	case ember.OpNe:
+		// Unreachable: OpNe is special-cased in node() as $nin:[null, v] to
+		// exclude missing/null. Kept so mongoOp stays total over Operator.
 		return "$ne", nil
 	case ember.OpGt:
 		return "$gt", nil

@@ -60,6 +60,9 @@ func TestBuildFilter(t *testing.T) {
 		{"in empty", ember.In("region"), bson.D{{Key: "data.region", Value: bson.D{{Key: "$in", Value: bson.A{}}}}}},
 		{"empty and matches all", ember.And(), bson.D{}},
 		{"empty or matches none", ember.Or(), bson.D{{Key: "$nor", Value: bson.A{bson.D{}}}}},
+		{"not of ne", ember.Not(ember.Ne("status", "open")), bson.D{{Key: "$nor", Value: bson.A{
+			bson.D{{Key: "data.status", Value: bson.D{{Key: "$nin", Value: bson.A{nil, "open"}}}}},
+		}}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
