@@ -3,11 +3,14 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"fmt"
-	"strings"
+
+	sq "github.com/Masterminds/squirrel"
 
 	"github.com/klemen-forstneric/ember"
 )
+
+// psql renders `?` placeholders as Postgres `$N`.
+var psql = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
 // EntityRepository
 type EntityRepository struct {
@@ -20,14 +23,20 @@ func NewEntityRepository(db *sql.DB, table string) *EntityRepository {
 }
 
 func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) error {
-	query := fmt.Sprintf(`
-		INSERT INTO %s (id, type, version, data)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (id) DO UPDATE
-			SET version = $3, data = $4
-			WHERE %s.version = $5`, r.table, r.table)
+	query, args, err := psql.
+		Insert(r.table).
+		Columns("id", "type", "version", "data").
+		Values(m.ID, m.Type, m.Version.Value(), m.Data).
+		Suffix(
+			"ON CONFLICT (id) DO UPDATE SET version = ?, data = ? WHERE "+r.table+".version = ?",
+			m.Version.Value(), m.Data, m.Version.Initial(),
+		).
+		ToSql()
+	if err != nil {
+		return err
+	}
 
-	res, err := r.db.ExecContext(ctx, query, m.ID, m.Type, m.Version.Value(), m.Data, m.Version.Initial())
+	res, err := r.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -45,16 +54,20 @@ func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) e
 }
 
 func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.MarshaledEntity, error) {
-	query := fmt.Sprintf(`
-		SELECT version, data
-		FROM %s
-		WHERE type = $1 AND id = $2`, r.table)
+	query, args, err := psql.
+		Select("version", "data").
+		From(r.table).
+		Where(sq.Eq{"type": typ, "id": id}).
+		ToSql()
+	if err != nil {
+		return nil, err
+	}
 
 	var (
 		version uint64
 		data    []byte
 	)
-	row := r.db.QueryRowContext(ctx, query, typ, id)
+	row := r.db.QueryRowContext(ctx, query, args...)
 
 	if err := row.Scan(&version, &data); err == sql.ErrNoRows {
 		return nil, ember.ErrEntityNotFound
@@ -71,21 +84,22 @@ func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.Mars
 }
 
 func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter) ([]*ember.MarshaledEntity, error) {
-	where, args, err := buildWhere(f)
+	pred, err := buildPredicate(f)
 	if err != nil {
 		return nil, err
 	}
 
-	typeIdx := len(args) + 1
-	args = append(args, typ)
-
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "SELECT id, version, data FROM %s WHERE type = $%d", r.table, typeIdx)
-	if where != "" {
-		fmt.Fprintf(&sb, " AND (%s)", where)
+	qb := psql.Select("id", "version", "data").From(r.table).Where(sq.Eq{"type": typ})
+	if pred != nil {
+		qb = qb.Where(pred) // multiple Where clauses are AND-ed together
 	}
 
-	rows, err := r.db.QueryContext(ctx, sb.String(), args...)
+	query, args, err := qb.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
