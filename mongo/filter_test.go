@@ -78,3 +78,6 @@ func TestBuildFilterUnsupportedValue(t *testing.T) {
 		t.Errorf("got %v, want ErrUnsupportedFilter", err)
 	}
 }
+
+// Compile-time assertion that the repository satisfies the interface.
+var _ ember.EntityRepository = (*EntityRepository)(nil)
