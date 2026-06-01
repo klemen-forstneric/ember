@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
@@ -47,6 +48,16 @@ func TestBuildFilter(t *testing.T) {
 				bson.D{{Key: "data.status", Value: bson.D{{Key: "$eq", Value: "open"}}}},
 			}}},
 		},
+		{"time normalized", ember.Eq("createdAt", time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)), bson.D{{Key: "data.createdAt", Value: bson.D{{Key: "$eq", Value: "2024-01-02T03:04:05Z"}}}}},
+		{"not of and", ember.Not(ember.And(ember.Eq("a", "1"), ember.Eq("b", "2"))), bson.D{{Key: "$nor", Value: bson.A{
+			bson.D{{Key: "$and", Value: bson.A{
+				bson.D{{Key: "data.a", Value: bson.D{{Key: "$eq", Value: "1"}}}},
+				bson.D{{Key: "data.b", Value: bson.D{{Key: "$eq", Value: "2"}}}},
+			}}},
+		}}}},
+		{"in empty", ember.In("region"), bson.D{{Key: "data.region", Value: bson.D{{Key: "$in", Value: bson.A{}}}}}},
+		{"empty and matches all", ember.And(), bson.D{}},
+		{"empty or matches none", ember.Or(), bson.D{{Key: "$nor", Value: bson.A{bson.D{}}}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

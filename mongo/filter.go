@@ -43,14 +43,23 @@ func node(f ember.Filter) (bson.D, error) {
 	case ember.Existence:
 		return bson.D{{Key: field(n.Path), Value: bson.D{{Key: "$exists", Value: n.Exists}}}}, nil
 	case ember.Conjunction:
+		if len(n.Filters) == 0 {
+			return bson.D{}, nil // empty AND matches all
+		}
 		return composite("$and", n.Filters)
 	case ember.Disjunction:
+		if len(n.Filters) == 0 {
+			// empty OR matches nothing; {} matches all, so $nor of {} matches none
+			return bson.D{{Key: "$nor", Value: bson.A{bson.D{}}}}, nil
+		}
 		return composite("$or", n.Filters)
 	case ember.Negation:
 		inner, err := node(n.Filter)
 		if err != nil {
 			return nil, err
 		}
+		// $nor with a single element is the standard top-level negation in
+		// MongoDB; $not is only valid as a field-level operator.
 		return bson.D{{Key: "$nor", Value: bson.A{inner}}}, nil
 	default:
 		return nil, fmt.Errorf("%w: unknown node %T", ember.ErrUnsupportedFilter, f)
@@ -101,8 +110,11 @@ func mongoOp(op ember.Operator) (string, error) {
 	}
 }
 
-// normalizeValue validates a filter value and converts time.Time to RFC3339Nano
-// text (matching JSON serialization of the stored data).
+// normalizeValue validates a filter value. time.Time is converted to an
+// RFC3339Nano string because the entity serializer encodes time.Time as an
+// RFC3339 string in JSON, which bson.UnmarshalExtJSON then stores as a BSON
+// string. All other primitives pass through unchanged to match their native
+// BSON type in the data subdocument.
 func normalizeValue(v any) (any, error) {
 	switch x := v.(type) {
 	case string, bool,
