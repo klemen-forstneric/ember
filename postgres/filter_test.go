@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/klemen-forstneric/ember"
 )
@@ -39,6 +40,9 @@ func TestBuildWhere(t *testing.T) {
 			"(data#>>'{a}' = $1) OR (data#>>'{b}' = $2)",
 			[]any{"1", "2"},
 		},
+		{"in numeric cast", ember.In("price", 100, 200), "(data#>>'{price}')::numeric IN ($1, $2)", []any{100, 200}},
+		{"time normalized to rfc3339nano", ember.Eq("createdAt", time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)), "data#>>'{createdAt}' = $1", []any{"2024-01-02T03:04:05Z"}},
+		{"not of and", ember.Not(ember.And(ember.Eq("a", "1"), ember.Eq("b", "2"))), "NOT ((data#>>'{a}' = $1) AND (data#>>'{b}' = $2))", []any{"1", "2"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

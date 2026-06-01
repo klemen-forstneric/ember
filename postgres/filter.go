@@ -79,7 +79,10 @@ func (t *translator) membership(m ember.Membership) (string, error) {
 	if len(m.Values) == 0 {
 		return "FALSE", nil
 	}
-	col, _ := column(m.Path)
+	col, reserved := column(m.Path)
+	if !reserved {
+		col = castFor(col, m.Values[0])
+	}
 	phs := make([]string, 0, len(m.Values))
 	for _, v := range m.Values {
 		ph, err := t.placeholder(v)
@@ -116,6 +119,7 @@ func existence(e ember.Existence) string {
 
 // column maps a filter path to a SQL column expression. Reserved metadata paths
 // map to real columns; everything else extracts text from the jsonb data column.
+// Path segments must not contain commas, braces, or double-quote characters.
 func column(path string) (expr string, reserved bool) {
 	switch path {
 	case "id", "type", "version":
@@ -144,6 +148,8 @@ func sqlOp(op ember.Operator) (string, error) {
 	case ember.OpEq:
 		return "=", nil
 	case ember.OpNe:
+		// Note: for jsonb data paths an absent key extracts to SQL NULL, so <>
+		// (and all comparisons) silently exclude rows where the key is missing.
 		return "<>", nil
 	case ember.OpGt:
 		return ">", nil
