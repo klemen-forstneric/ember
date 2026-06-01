@@ -65,14 +65,17 @@ func (t *translator) comparison(c ember.Comparison) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !reserved {
-		col = castFor(col, c.Value)
-	}
 	ph, err := t.placeholder(c.Value)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s %s %s", col, op, ph), nil
+	if reserved {
+		return fmt.Sprintf("%s %s %s", col, op, ph), nil
+	}
+	// Guard a jsonb path so a missing/null value makes the leaf strictly false
+	// (two-valued semantics) instead of SQL NULL. The guard checks the uncast
+	// text extraction; the comparison uses the (possibly cast) expression.
+	return fmt.Sprintf("%s IS NOT NULL AND %s %s %s", col, castFor(col, c.Value), op, ph), nil
 }
 
 func (t *translator) membership(m ember.Membership) (string, error) {
@@ -80,9 +83,6 @@ func (t *translator) membership(m ember.Membership) (string, error) {
 		return "FALSE", nil
 	}
 	col, reserved := column(m.Path)
-	if !reserved {
-		col = castFor(col, m.Values[0])
-	}
 	phs := make([]string, 0, len(m.Values))
 	for _, v := range m.Values {
 		ph, err := t.placeholder(v)
@@ -91,7 +91,11 @@ func (t *translator) membership(m ember.Membership) (string, error) {
 		}
 		phs = append(phs, ph)
 	}
-	return fmt.Sprintf("%s IN (%s)", col, strings.Join(phs, ", ")), nil
+	in := strings.Join(phs, ", ")
+	if reserved {
+		return fmt.Sprintf("%s IN (%s)", col, in), nil
+	}
+	return fmt.Sprintf("%s IS NOT NULL AND %s IN (%s)", col, castFor(col, m.Values[0]), in), nil
 }
 
 func (t *translator) composite(fs []ember.Filter, joiner, empty string) (string, error) {

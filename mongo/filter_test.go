@@ -24,7 +24,9 @@ func TestBuildFilter(t *testing.T) {
 		{"reserved version", ember.Gt("version", 5), bson.D{{Key: "version", Value: bson.D{{Key: "$gt", Value: 5}}}}},
 		{"gt", ember.Gt("total", 100), bson.D{{Key: "data.total", Value: bson.D{{Key: "$gt", Value: 100}}}}},
 		{"in", ember.In("region", "EU", "UK"), bson.D{{Key: "data.region", Value: bson.D{{Key: "$in", Value: bson.A{"EU", "UK"}}}}}},
-		{"exists", ember.Exists("status", true), bson.D{{Key: "data.status", Value: bson.D{{Key: "$exists", Value: true}}}}},
+		{"exists", ember.Exists("status", true), bson.D{{Key: "data.status", Value: bson.D{{Key: "$ne", Value: nil}}}}},
+		{"exists false", ember.Exists("status", false), bson.D{{Key: "data.status", Value: bson.D{{Key: "$eq", Value: nil}}}}},
+		{"ne", ember.Ne("status", "open"), bson.D{{Key: "data.status", Value: bson.D{{Key: "$nin", Value: bson.A{nil, "open"}}}}}},
 		{
 			"and",
 			ember.And(ember.Eq("a", "1"), ember.Eq("b", "2")),

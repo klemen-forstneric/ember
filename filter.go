@@ -20,6 +20,14 @@ const (
 
 // Filter is a sealed sum type. Only ember-defined nodes satisfy it, so
 // repositories can translate the closed set exhaustively.
+//
+// Null/missing-path semantics (two-valued): a path predicate (Comparison,
+// Membership) is satisfied only when the referenced path is present, non-null,
+// and the comparison holds; a missing or null path makes that leaf false.
+// And/Or/Not combine leaves as ordinary booleans. As a result Ne(p, x) does not
+// match entities where p is absent/null, while Not(Eq(p, x)) does. Exists(p, true)
+// means present and non-null; Exists(p, false) is its complement. Every backend
+// honors these semantics identically.
 type Filter interface {
 	isFilter()
 }

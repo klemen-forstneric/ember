@@ -21,15 +21,20 @@ func buildFilter(f ember.Filter) (bson.D, error) {
 func node(f ember.Filter) (bson.D, error) {
 	switch n := f.(type) {
 	case ember.Comparison:
-		op, err := mongoOp(n.Op)
-		if err != nil {
-			return nil, err
-		}
 		v, err := normalizeValue(n.Value)
 		if err != nil {
 			return nil, err
 		}
-		return bson.D{{Key: field(n.Path), Value: bson.D{{Key: op, Value: v}}}}, nil
+		f := field(n.Path)
+		if n.Op == ember.OpNe {
+			// Exclude missing/null so Ne is the two-valued complement of Eq.
+			return bson.D{{Key: f, Value: bson.D{{Key: "$nin", Value: bson.A{nil, v}}}}}, nil
+		}
+		op, err := mongoOp(n.Op)
+		if err != nil {
+			return nil, err
+		}
+		return bson.D{{Key: f, Value: bson.D{{Key: op, Value: v}}}}, nil
 	case ember.Membership:
 		vals := make(bson.A, 0, len(n.Values))
 		for _, raw := range n.Values {
@@ -41,7 +46,12 @@ func node(f ember.Filter) (bson.D, error) {
 		}
 		return bson.D{{Key: field(n.Path), Value: bson.D{{Key: "$in", Value: vals}}}}, nil
 	case ember.Existence:
-		return bson.D{{Key: field(n.Path), Value: bson.D{{Key: "$exists", Value: n.Exists}}}}, nil
+		f := field(n.Path)
+		if n.Exists {
+			// Present and non-null (a missing field is treated as null).
+			return bson.D{{Key: f, Value: bson.D{{Key: "$ne", Value: nil}}}}, nil
+		}
+		return bson.D{{Key: f, Value: bson.D{{Key: "$eq", Value: nil}}}}, nil
 	case ember.Conjunction:
 		if len(n.Filters) == 0 {
 			return bson.D{}, nil // empty AND matches all

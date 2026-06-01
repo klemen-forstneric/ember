@@ -17,32 +17,32 @@ func TestBuildWhere(t *testing.T) {
 		wantArgs []any
 	}{
 		{"nil matches all", nil, "", nil},
-		{"eq string data path", ember.Eq("status", "open"), "data#>>'{status}' = $1", []any{"open"}},
-		{"nested data path", ember.Eq("address.city", "NYC"), "data#>>'{address,city}' = $1", []any{"NYC"}},
+		{"eq string data path", ember.Eq("status", "open"), "data#>>'{status}' IS NOT NULL AND data#>>'{status}' = $1", []any{"open"}},
+		{"nested data path", ember.Eq("address.city", "NYC"), "data#>>'{address,city}' IS NOT NULL AND data#>>'{address,city}' = $1", []any{"NYC"}},
 		{"reserved id", ember.Eq("id", "x"), "id = $1", []any{"x"}},
 		{"reserved version", ember.Gt("version", 5), "version > $1", []any{5}},
-		{"gt numeric cast", ember.Gt("total", 4200), "(data#>>'{total}')::numeric > $1", []any{4200}},
-		{"ne", ember.Ne("status", "open"), "data#>>'{status}' <> $1", []any{"open"}},
-		{"in", ember.In("region", "EU", "UK"), "data#>>'{region}' IN ($1, $2)", []any{"EU", "UK"}},
+		{"gt numeric cast", ember.Gt("total", 4200), "data#>>'{total}' IS NOT NULL AND (data#>>'{total}')::numeric > $1", []any{4200}},
+		{"ne", ember.Ne("status", "open"), "data#>>'{status}' IS NOT NULL AND data#>>'{status}' <> $1", []any{"open"}},
+		{"in", ember.In("region", "EU", "UK"), "data#>>'{region}' IS NOT NULL AND data#>>'{region}' IN ($1, $2)", []any{"EU", "UK"}},
 		{"in empty is false", ember.In("region"), "FALSE", nil},
 		{"exists true", ember.Exists("status", true), "data#>>'{status}' IS NOT NULL", nil},
 		{"exists false", ember.Exists("status", false), "data#>>'{status}' IS NULL", nil},
-		{"not", ember.Not(ember.Eq("status", "open")), "NOT (data#>>'{status}' = $1)", []any{"open"}},
+		{"not", ember.Not(ember.Eq("status", "open")), "NOT (data#>>'{status}' IS NOT NULL AND data#>>'{status}' = $1)", []any{"open"}},
 		{
 			"and",
 			ember.And(ember.Eq("status", "open"), ember.Gt("total", 100)),
-			"(data#>>'{status}' = $1) AND ((data#>>'{total}')::numeric > $2)",
+			"(data#>>'{status}' IS NOT NULL AND data#>>'{status}' = $1) AND (data#>>'{total}' IS NOT NULL AND (data#>>'{total}')::numeric > $2)",
 			[]any{"open", 100},
 		},
 		{
 			"or",
 			ember.Or(ember.Eq("a", "1"), ember.Eq("b", "2")),
-			"(data#>>'{a}' = $1) OR (data#>>'{b}' = $2)",
+			"(data#>>'{a}' IS NOT NULL AND data#>>'{a}' = $1) OR (data#>>'{b}' IS NOT NULL AND data#>>'{b}' = $2)",
 			[]any{"1", "2"},
 		},
-		{"in numeric cast", ember.In("price", 100, 200), "(data#>>'{price}')::numeric IN ($1, $2)", []any{100, 200}},
-		{"time normalized to rfc3339nano", ember.Eq("createdAt", time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)), "data#>>'{createdAt}' = $1", []any{"2024-01-02T03:04:05Z"}},
-		{"not of and", ember.Not(ember.And(ember.Eq("a", "1"), ember.Eq("b", "2"))), "NOT ((data#>>'{a}' = $1) AND (data#>>'{b}' = $2))", []any{"1", "2"}},
+		{"in numeric cast", ember.In("price", 100, 200), "data#>>'{price}' IS NOT NULL AND (data#>>'{price}')::numeric IN ($1, $2)", []any{100, 200}},
+		{"time normalized to rfc3339nano", ember.Eq("createdAt", time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)), "data#>>'{createdAt}' IS NOT NULL AND data#>>'{createdAt}' = $1", []any{"2024-01-02T03:04:05Z"}},
+		{"not of and", ember.Not(ember.And(ember.Eq("a", "1"), ember.Eq("b", "2"))), "NOT ((data#>>'{a}' IS NOT NULL AND data#>>'{a}' = $1) AND (data#>>'{b}' IS NOT NULL AND data#>>'{b}' = $2))", []any{"1", "2"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
