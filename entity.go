@@ -49,7 +49,8 @@ type EntityMarshaler[E Entity] interface {
 // EntityRepository
 type EntityRepository interface {
 	Save(ctx context.Context, m *MarshaledEntity) error
-	Load(ctx context.Context, typ, id string) (*MarshaledEntity, error)
+	Get(ctx context.Context, typ, id string) (*MarshaledEntity, error)
+	List(ctx context.Context, typ string, f Filter) ([]*MarshaledEntity, error)
 }
 
 // EntityStore
@@ -62,14 +63,33 @@ func NewEntityStore[E Entity](r EntityRepository, m EntityMarshaler[E]) *EntityS
 	return &EntityStore[E]{repository: r, marshaler: m}
 }
 
-func (s *EntityStore[E]) Load(ctx context.Context, id string) (E, error) {
+func (s *EntityStore[E]) Get(ctx context.Context, id string) (E, error) {
 	var empty E
-	m, err := s.repository.Load(ctx, empty.Type(), id)
+	m, err := s.repository.Get(ctx, empty.Type(), id)
 	if err != nil {
 		return empty, err
 	}
 
 	return s.marshaler.Unmarshal(ctx, m)
+}
+
+func (s *EntityStore[E]) List(ctx context.Context, f Filter) ([]E, error) {
+	var empty E
+	ms, err := s.repository.List(ctx, empty.Type(), f)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]E, 0, len(ms))
+	for _, m := range ms {
+		e, err := s.marshaler.Unmarshal(ctx, m)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+
+	return out, nil
 }
 
 func (s *EntityStore[E]) Save(ctx context.Context, e E) error {
