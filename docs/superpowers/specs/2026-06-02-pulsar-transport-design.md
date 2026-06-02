@@ -66,7 +66,7 @@ provide them — see Ordering note).
    }
 
    type consumerRegistry interface {
-       Get(ctx context.Context, subscription string) ([]subscriptionConsumer, error)
+       Get(ctx context.Context, subscription string) ([]consumer, error)
        Close() error
    }
    ```
@@ -101,9 +101,7 @@ consumer shape.
 
 ## Components
 
-### `producer` / `consumer` (unchanged low-level interfaces)
-
-The existing narrow interfaces that wrap the Pulsar SDK objects:
+### `producer` / `consumer` (narrow interfaces over the Pulsar SDK objects)
 
 ```go
 type producer interface {
@@ -117,28 +115,24 @@ type consumer interface {
     Ack(pulsar.Message) error
     Nack(pulsar.Message)
     Close()
+    MaxDeliveries() int
 }
 ```
 
-`Close()` is added to both so registries can release them. It is **void**, not
-`error`, so the interfaces remain directly satisfiable by `pulsar.Producer` /
-`pulsar.Consumer` (whose `Close()` are void) without an adapter. The registries'
-`Close() error` therefore aggregates nothing from the SDK and returns `nil` in
-the real impls; the `error` return is kept for a uniform closer signature.
+`Close()` is **void**, not `error`, matching the SDK. So `pulsar.Producer`
+satisfies `producer` directly. The registries' `Close() error` therefore
+aggregates nothing from the SDK and returns `nil` in the real impls; the `error`
+return is kept for a uniform closer signature.
 
-### `subscriptionConsumer`
-
-Carries what the subscriber needs from each created consumer without leaking the
-full `pulsar.ConsumerOptions` past the registry boundary:
-
-```go
-type subscriptionConsumer struct {
-    consumer      consumer
-    maxDeliveries int // derived from opts.DLQ; 0 when DLQ is nil
-}
-```
-
-The registry computes `maxDeliveries` and guards the `opt.DLQ` nil case there.
+`consumer` additionally exposes `MaxDeliveries() int` — the per-consumer retry
+budget the Subscriber stamps onto events. Putting it on the interface (rather
+than a separate `{consumer, maxDeliveries}` pairing struct) keeps the
+DLQ-config interpretation inside the registry and out of the Subscriber's
+message loop, and lets `Get` return a plain `[]consumer`. The trade-off: a raw
+`pulsar.Consumer` has no `MaxDeliveries()`, so the consumer registry wraps it in
+a tiny `pulsarConsumer` adapter (embeds `pulsar.Consumer`, which promotes
+`Chan`/`Ack`/`Nack`/`Close`, and adds `MaxDeliveries`). Direct SDK satisfiability
+was treated as nice-to-have, not a constraint.
 
 ### `producerRegistry` (real impl)
 
@@ -157,11 +151,12 @@ Constructed with `map[string][]pulsar.ConsumerOptions` and a `*pulsar.Client`.
 
 1. `opts, ok := config[subscription]`; `!ok` → return an "unknown subscription"
    error.
-2. For each option, create a consumer and wrap it in a `subscriptionConsumer`
-   (computing `maxDeliveries` with a nil-`DLQ` guard). On any creation failure,
-   close those already created and return the error.
+2. For each option, create a consumer and wrap it in a `pulsarConsumer`
+   (computing `MaxDeliveries` with a nil-`DLQ` guard). On any creation failure,
+   close those already created in this call and return the error. Consumers are
+   recorded for teardown only after the whole subscription is created.
 
-`Close()` closes every consumer it created, joining errors.
+`Close()` closes every consumer it created.
 
 ### `pulsar.Publisher`
 
@@ -199,12 +194,12 @@ func NewSubscriber(r consumerRegistry, l ember.LoggerCtx) *Subscriber
 
 `Subscribe(ctx, name) (<-chan ember.AckableEventEnvelope, error)`:
 
-1. `scs, err := s.registry.Get(ctx, name)`; on error return it.
+1. `consumers, err := s.registry.Get(ctx, name)`; on error return it.
 2. Create one `out` channel for this call.
-3. For each `subscriptionConsumer`, spawn a goroutine (`s.wg.Add(1)`) running the
-   existing loop: read `consumer.Chan()`, unmarshal `message` (on failure log and
+3. For each `consumer`, spawn a goroutine (`s.wg.Add(1)`) running the
+   existing loop: read `c.Chan()`, unmarshal `message` (on failure log and
    `continue`), rebuild `Metadata` stamping `current_delivery`
-   (`msg.RedeliveryCount()`), `max_deliveries` (`sc.maxDeliveries`), and
+   (`msg.RedeliveryCount()`), `max_deliveries` (`c.MaxDeliveries()`), and
    `correlation_id`, build the `AckableEventEnvelope` with `Ack`/`Nack` closures,
    and forward to `out` — bailing on `<-s.shutdown`.
 4. Return `out`.

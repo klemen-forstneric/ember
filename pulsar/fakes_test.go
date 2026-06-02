@@ -72,18 +72,21 @@ func (f *fakeProducerRegistry) Close() error {
 // fakeConsumer drives the Subscriber: push messages onto in, and the
 // Subscriber's goroutine reads them off Chan(). Ack/Nack record the message.
 type fakeConsumer struct {
-	in     chan pulsar.ConsumerMessage
-	mu     sync.Mutex
-	acked  []pulsar.Message
-	nacked []pulsar.Message
-	closed bool
+	in            chan pulsar.ConsumerMessage
+	maxDeliveries int
+	mu            sync.Mutex
+	acked         []pulsar.Message
+	nacked        []pulsar.Message
+	closed        bool
 }
 
-func newFakeConsumer() *fakeConsumer {
-	return &fakeConsumer{in: make(chan pulsar.ConsumerMessage, 8)}
+func newFakeConsumer(maxDeliveries int) *fakeConsumer {
+	return &fakeConsumer{in: make(chan pulsar.ConsumerMessage, 8), maxDeliveries: maxDeliveries}
 }
 
 func (f *fakeConsumer) Chan() <-chan pulsar.ConsumerMessage { return f.in }
+
+func (f *fakeConsumer) MaxDeliveries() int { return f.maxDeliveries }
 
 func (f *fakeConsumer) Ack(m pulsar.Message) error {
 	f.mu.Lock()
@@ -107,22 +110,22 @@ func (f *fakeConsumer) Close() {
 // fakeConsumerRegistry maps subscription name -> consumers to fan in.
 type fakeConsumerRegistry struct {
 	mu         sync.Mutex
-	subs       map[string][]subscriptionConsumer
+	subs       map[string][]consumer
 	getErr     error
 	closeCalls int
 }
 
-func (f *fakeConsumerRegistry) Get(_ context.Context, subscription string) ([]subscriptionConsumer, error) {
+func (f *fakeConsumerRegistry) Get(_ context.Context, subscription string) ([]consumer, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
-	scs, ok := f.subs[subscription]
+	cs, ok := f.subs[subscription]
 	if !ok {
 		return nil, fmt.Errorf("unknown subscription %q", subscription)
 	}
-	return scs, nil
+	return cs, nil
 }
 
 func (f *fakeConsumerRegistry) Close() error {

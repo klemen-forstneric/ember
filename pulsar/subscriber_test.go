@@ -38,9 +38,9 @@ func msgFor(t *testing.T, eventType, entityID, correlationID string, redelivered
 }
 
 func TestSubscribeForwardsAndStampsMetadata(t *testing.T) {
-	c := newFakeConsumer()
-	reg := &fakeConsumerRegistry{subs: map[string][]subscriptionConsumer{
-		"projector": {{consumer: c, maxDeliveries: 5}},
+	c := newFakeConsumer(5)
+	reg := &fakeConsumerRegistry{subs: map[string][]consumer{
+		"projector": {c},
 	}}
 	s := NewSubscriber(reg, ember.NopLogger)
 
@@ -77,9 +77,9 @@ func TestSubscribeForwardsAndStampsMetadata(t *testing.T) {
 }
 
 func TestSubscribeFansInMultipleConsumers(t *testing.T) {
-	a, b := newFakeConsumer(), newFakeConsumer()
-	reg := &fakeConsumerRegistry{subs: map[string][]subscriptionConsumer{
-		"projector": {{consumer: a, maxDeliveries: 1}, {consumer: b, maxDeliveries: 1}},
+	a, b := newFakeConsumer(1), newFakeConsumer(1)
+	reg := &fakeConsumerRegistry{subs: map[string][]consumer{
+		"projector": {a, b},
 	}}
 	s := NewSubscriber(reg, ember.NopLogger)
 
@@ -107,9 +107,9 @@ func TestSubscribeFansInMultipleConsumers(t *testing.T) {
 }
 
 func TestSubscribeNackInvokesConsumer(t *testing.T) {
-	c := newFakeConsumer()
-	reg := &fakeConsumerRegistry{subs: map[string][]subscriptionConsumer{
-		"projector": {{consumer: c, maxDeliveries: 1}},
+	c := newFakeConsumer(1)
+	reg := &fakeConsumerRegistry{subs: map[string][]consumer{
+		"projector": {c},
 	}}
 	s := NewSubscriber(reg, ember.NopLogger)
 
@@ -137,7 +137,7 @@ func TestSubscribeNackInvokesConsumer(t *testing.T) {
 }
 
 func TestSubscribeUnknownSubscriptionErrors(t *testing.T) {
-	reg := &fakeConsumerRegistry{subs: map[string][]subscriptionConsumer{}}
+	reg := &fakeConsumerRegistry{subs: map[string][]consumer{}}
 	s := NewSubscriber(reg, ember.NopLogger)
 	if _, err := s.Subscribe(context.Background(), "nope"); err == nil {
 		t.Fatal("expected error for unknown subscription")
@@ -145,8 +145,8 @@ func TestSubscribeUnknownSubscriptionErrors(t *testing.T) {
 }
 
 func TestStopClosesRegistry(t *testing.T) {
-	reg := &fakeConsumerRegistry{subs: map[string][]subscriptionConsumer{
-		"projector": {{consumer: newFakeConsumer(), maxDeliveries: 1}},
+	reg := &fakeConsumerRegistry{subs: map[string][]consumer{
+		"projector": {newFakeConsumer(1)},
 	}}
 	s := NewSubscriber(reg, ember.NopLogger)
 	if _, err := s.Subscribe(context.Background(), "projector"); err != nil {

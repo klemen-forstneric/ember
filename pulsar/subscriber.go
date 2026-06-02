@@ -30,20 +30,20 @@ func NewSubscriber(r consumerRegistry, l ember.LoggerCtx) *Subscriber {
 }
 
 func (s *Subscriber) Subscribe(ctx context.Context, name string) (<-chan ember.AckableEventEnvelope, error) {
-	scs, err := s.registry.Get(ctx, name)
+	consumers, err := s.registry.Get(ctx, name)
 	if err != nil {
 		return nil, err
 	}
 
 	out := make(chan ember.AckableEventEnvelope)
 
-	for _, sc := range scs {
+	for _, c := range consumers {
 		s.wg.Add(1)
-		go func(sc subscriptionConsumer) {
+		go func(c consumer) {
 			defer s.wg.Done()
 			for {
 				select {
-				case cmsg := <-sc.consumer.Chan():
+				case cmsg := <-c.Chan():
 					var m message
 					if err := json.Unmarshal(cmsg.Payload(), &m); err != nil {
 						s.logger.Error(ctx, "Could not unmarshal the message", err)
@@ -55,7 +55,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, name string) (<-chan ember.A
 						metadata = make(ember.Metadata)
 					}
 					metadata[MetadataKeyCurrentDelivery] = int(cmsg.RedeliveryCount())
-					metadata[MetadataKeyMaxDeliveries] = sc.maxDeliveries
+					metadata[MetadataKeyMaxDeliveries] = c.MaxDeliveries()
 					metadata[MetadataKeyCorrelationID] = m.CorrelationID
 
 					msg := cmsg.Message
@@ -68,11 +68,11 @@ func (s *Subscriber) Subscribe(ctx context.Context, name string) (<-chan ember.A
 							Timestamp: m.PublishedAt,
 						},
 						Ack: func() {
-							if err := sc.consumer.Ack(msg); err != nil {
+							if err := c.Ack(msg); err != nil {
 								s.logger.Error(ctx, "Could not acknowledge the event", err)
 							}
 						},
-						Nack: func() { sc.consumer.Nack(msg) },
+						Nack: func() { c.Nack(msg) },
 					}
 
 					select {
@@ -84,7 +84,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, name string) (<-chan ember.A
 					return
 				}
 			}
-		}(sc)
+		}(c)
 	}
 
 	return out, nil

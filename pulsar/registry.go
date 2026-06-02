@@ -13,20 +13,16 @@ type producer interface {
 	Close()
 }
 
-// consumer is the narrow slice of *pulsar.Consumer the Subscriber needs.
+// consumer is the slice of *pulsar.Consumer the Subscriber needs, plus
+// MaxDeliveries (the per-consumer retry budget the Subscriber stamps onto
+// events). MaxDeliveries means the registry, not the Subscriber, interprets the
+// Pulsar DLQ config; the registry wraps the raw SDK consumer to supply it.
 type consumer interface {
 	Chan() <-chan pulsar.ConsumerMessage
 	Ack(pulsar.Message) error
 	Nack(pulsar.Message)
 	Close()
-}
-
-// subscriptionConsumer pairs a created consumer with the per-consumer metadata
-// the Subscriber stamps onto events, so the raw pulsar.ConsumerOptions never
-// leaks past the registry boundary.
-type subscriptionConsumer struct {
-	consumer      consumer
-	maxDeliveries int
+	MaxDeliveries() int
 }
 
 // producerRegistry resolves the producer for an event type, creating and
@@ -40,6 +36,6 @@ type producerRegistry interface {
 // one subscription may map to several consumers). Get returns an error for an
 // unknown subscription.
 type consumerRegistry interface {
-	Get(ctx context.Context, subscription string) ([]subscriptionConsumer, error)
+	Get(ctx context.Context, subscription string) ([]consumer, error)
 	Close() error
 }

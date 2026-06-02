@@ -73,13 +73,13 @@ func NewConsumerRegistry(client pulsar.Client, config map[string][]pulsar.Consum
 
 // Get ignores ctx for the same reason as clientProducerRegistry.Get: the
 // v0.19.0 Subscribe API takes only options.
-func (r *clientConsumerRegistry) Get(_ context.Context, subscription string) ([]subscriptionConsumer, error) {
+func (r *clientConsumerRegistry) Get(_ context.Context, subscription string) ([]consumer, error) {
 	opts, ok := r.config[subscription]
 	if !ok {
 		return nil, fmt.Errorf("no consumer options configured for subscription %q", subscription)
 	}
 
-	scs := make([]subscriptionConsumer, 0, len(opts))
+	consumers := make([]consumer, 0, len(opts))
 	for _, opt := range opts {
 		c, err := r.client.Subscribe(opt)
 		if err != nil {
@@ -87,26 +87,31 @@ func (r *clientConsumerRegistry) Get(_ context.Context, subscription string) ([]
 			// They are not yet tracked in r.created (we only record them on full
 			// success below), so the caller — which never reaches Stop() after a
 			// Subscribe error — would otherwise leak them at the broker.
-			for _, sc := range scs {
-				sc.consumer.Close()
+			for _, created := range consumers {
+				created.Close()
 			}
 			return nil, fmt.Errorf("could not create consumer for subscription %q: %w", subscription, err)
 		}
 
-		scs = append(scs, subscriptionConsumer{
-			consumer:      c,
-			maxDeliveries: maxDeliveries(opt),
-		})
+		consumers = append(consumers, pulsarConsumer{Consumer: c, maxDeliveries: maxDeliveries(opt)})
 	}
 
 	r.mu.Lock()
-	for _, sc := range scs {
-		r.created = append(r.created, sc.consumer)
-	}
+	r.created = append(r.created, consumers...)
 	r.mu.Unlock()
 
-	return scs, nil
+	return consumers, nil
 }
+
+// pulsarConsumer adapts a raw *pulsar.Consumer to the consumer interface by
+// embedding it (which promotes Chan/Ack/Nack/Close) and adding the
+// per-consumer MaxDeliveries derived from its DLQ config.
+type pulsarConsumer struct {
+	pulsar.Consumer
+	maxDeliveries int
+}
+
+func (c pulsarConsumer) MaxDeliveries() int { return c.maxDeliveries }
 
 func (r *clientConsumerRegistry) Close() error {
 	r.mu.Lock()
