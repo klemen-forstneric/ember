@@ -13,7 +13,7 @@ const (
 	MetadataKeyCorrelationID   ember.MetadataKey = "correlation_id"
 )
 
-// message
+// message is the wire envelope serialized to and from the Pulsar payload.
 type message struct {
 	ID            string          `json:"event_id"`
 	CorrelationID string          `json:"correlation_id"`

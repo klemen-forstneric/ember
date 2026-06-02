@@ -31,27 +31,23 @@ func (f *fakeProducer) Close() {
 }
 
 // fakeProducerRegistry maps event type -> fakeProducer. A missing entry yields
-// getErr (set it to simulate an unmapped type). It records create-once by
-// counting Get calls per event type.
+// getErr (set it to simulate an unmapped type).
 type fakeProducerRegistry struct {
 	mu         sync.Mutex
 	producers  map[string]*fakeProducer
 	getErr     error
-	getCalls   map[string]int
 	closeCalls int
 }
 
 func newFakeProducerRegistry() *fakeProducerRegistry {
 	return &fakeProducerRegistry{
 		producers: map[string]*fakeProducer{},
-		getCalls:  map[string]int{},
 	}
 }
 
 func (f *fakeProducerRegistry) Get(_ context.Context, eventType string) (producer, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.getCalls[eventType]++
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
