@@ -106,6 +106,36 @@ func TestSubscribeFansInMultipleConsumers(t *testing.T) {
 	s.Stop()
 }
 
+func TestSubscribeNackInvokesConsumer(t *testing.T) {
+	c := newFakeConsumer()
+	reg := &fakeConsumerRegistry{subs: map[string][]subscriptionConsumer{
+		"projector": {{consumer: c, maxDeliveries: 1}},
+	}}
+	s := NewSubscriber(reg, ember.NopLogger)
+
+	out, err := s.Subscribe(context.Background(), "projector")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	c.in <- msgFor(t, "order.created", "e1", "corr-1", 0)
+
+	select {
+	case env := <-out:
+		env.Nack()
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for an envelope")
+	}
+
+	s.Stop()
+	if len(c.nacked) != 1 {
+		t.Errorf("expected 1 nack, got %d", len(c.nacked))
+	}
+	if len(c.acked) != 0 {
+		t.Errorf("expected 0 acks, got %d", len(c.acked))
+	}
+}
+
 func TestSubscribeUnknownSubscriptionErrors(t *testing.T) {
 	reg := &fakeConsumerRegistry{subs: map[string][]subscriptionConsumer{}}
 	s := NewSubscriber(reg, ember.NopLogger)

@@ -26,6 +26,9 @@ func NewProducerRegistry(client pulsar.Client, routes map[string]string) *client
 	}
 }
 
+// Get ignores ctx: the pulsar-client-go v0.19.0 CreateProducer API takes only
+// options, so there is nothing to thread it into. The parameter is kept for
+// interface symmetry and forward compatibility.
 func (r *clientProducerRegistry) Get(_ context.Context, eventType string) (producer, error) {
 	topic, ok := r.routes[eventType]
 	if !ok {
@@ -68,6 +71,8 @@ func NewConsumerRegistry(client pulsar.Client, config map[string][]pulsar.Consum
 	return &clientConsumerRegistry{client: client, config: config}
 }
 
+// Get ignores ctx for the same reason as clientProducerRegistry.Get: the
+// v0.19.0 Subscribe API takes only options.
 func (r *clientConsumerRegistry) Get(_ context.Context, subscription string) ([]subscriptionConsumer, error) {
 	opts, ok := r.config[subscription]
 	if !ok {
@@ -78,17 +83,28 @@ func (r *clientConsumerRegistry) Get(_ context.Context, subscription string) ([]
 	for _, opt := range opts {
 		c, err := r.client.Subscribe(opt)
 		if err != nil {
+			// Release the consumers created so far in this call before failing.
+			// They are not yet tracked in r.created (we only record them on full
+			// success below), so the caller — which never reaches Stop() after a
+			// Subscribe error — would otherwise leak them at the broker.
+			for _, sc := range scs {
+				sc.consumer.Close()
+			}
 			return nil, fmt.Errorf("could not create consumer for subscription %q: %w", subscription, err)
 		}
-		r.mu.Lock()
-		r.created = append(r.created, c)
-		r.mu.Unlock()
 
 		scs = append(scs, subscriptionConsumer{
 			consumer:      c,
 			maxDeliveries: maxDeliveries(opt),
 		})
 	}
+
+	r.mu.Lock()
+	for _, sc := range scs {
+		r.created = append(r.created, sc.consumer)
+	}
+	r.mu.Unlock()
+
 	return scs, nil
 }
 
