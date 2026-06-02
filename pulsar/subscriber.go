@@ -11,6 +11,8 @@ import (
 // Subscriber is the Pulsar implementation of ember.Transport. It resolves a
 // subscription name to one or more consumers via the registry and fans their
 // messages into a single channel.
+var _ ember.Transport = (*Subscriber)(nil)
+
 type Subscriber struct {
 	registry consumerRegistry
 	logger   ember.LoggerCtx
