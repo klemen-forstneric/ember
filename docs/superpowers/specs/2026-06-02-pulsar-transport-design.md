@@ -109,18 +109,22 @@ The existing narrow interfaces that wrap the Pulsar SDK objects:
 type producer interface {
     SendAsync(context.Context, *pulsar.ProducerMessage,
         func(pulsar.MessageID, *pulsar.ProducerMessage, error))
-    Close() error
+    Close()
 }
 
 type consumer interface {
     Chan() <-chan pulsar.ConsumerMessage
     Ack(pulsar.Message) error
     Nack(pulsar.Message)
-    Close() error
+    Close()
 }
 ```
 
-(`Close()` is added to both so registries can release them.)
+`Close()` is added to both so registries can release them. It is **void**, not
+`error`, so the interfaces remain directly satisfiable by `pulsar.Producer` /
+`pulsar.Consumer` (whose `Close()` are void) without an adapter. The registries'
+`Close() error` therefore aggregates nothing from the SDK and returns `nil` in
+the real impls; the `error` return is kept for a uniform closer signature.
 
 ### `subscriptionConsumer`
 
@@ -235,7 +239,7 @@ reading a consumer when it is closed.
 | Subscribe: unknown subscription name | `registry.Get` errors → `Subscribe` returns it |
 | Subscribe: malformed Pulsar payload | log + `continue` (do not ack a bad frame) |
 | `opt.DLQ` nil | guarded in registry; `maxDeliveries = 0` |
-| Consumer/producer close errors | joined and logged; not fatal |
+| `registry.Close()` | closes all SDK objects (void `Close()`); returns `nil`; `Stop` logs the (nil) result |
 
 ## Testing
 
