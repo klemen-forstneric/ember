@@ -74,19 +74,26 @@ func (f *fakeProducerRegistry) Close() error {
 type fakeConsumer struct {
 	in            chan pulsar.ConsumerMessage
 	maxDeliveries int
+	capped        bool
 	mu            sync.Mutex
 	acked         []pulsar.Message
 	nacked        []pulsar.Message
 	closed        bool
 }
 
+// newFakeConsumer returns a capped consumer (has a delivery cap).
 func newFakeConsumer(maxDeliveries int) *fakeConsumer {
-	return &fakeConsumer{in: make(chan pulsar.ConsumerMessage, 8), maxDeliveries: maxDeliveries}
+	return &fakeConsumer{in: make(chan pulsar.ConsumerMessage, 8), maxDeliveries: maxDeliveries, capped: true}
+}
+
+// newUncappedConsumer returns a consumer with no delivery cap (no DLQ).
+func newUncappedConsumer() *fakeConsumer {
+	return &fakeConsumer{in: make(chan pulsar.ConsumerMessage, 8)}
 }
 
 func (f *fakeConsumer) Chan() <-chan pulsar.ConsumerMessage { return f.in }
 
-func (f *fakeConsumer) MaxDeliveries() int { return f.maxDeliveries }
+func (f *fakeConsumer) MaxDeliveries() (int, bool) { return f.maxDeliveries, f.capped }
 
 func (f *fakeConsumer) Ack(m pulsar.Message) error {
 	f.mu.Lock()

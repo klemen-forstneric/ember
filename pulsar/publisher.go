@@ -11,6 +11,13 @@ import (
 	"github.com/klemen-forstneric/ember"
 )
 
+// producerRegistry resolves the producer for an event type, creating and
+// caching it on demand. Get returns an error for an unmapped event type.
+type producerRegistry interface {
+	Get(ctx context.Context, eventType string) (producer, error)
+	Close() error
+}
+
 // Publisher sends marshaled event envelopes onto Pulsar topics, routing each
 // event to its topic via the producerRegistry.
 type Publisher struct {
@@ -30,6 +37,7 @@ func (p *Publisher) Publish(ctx context.Context, envelopes ...ember.EventEnvelop
 		prod producer
 		msg  *pulsar.ProducerMessage
 	}
+
 	prepared := make([]pending, 0, len(envelopes))
 
 	for _, e := range envelopes {
@@ -87,7 +95,6 @@ func (p *Publisher) Publish(ctx context.Context, envelopes ...ember.EventEnvelop
 	return errors.Join(errs...)
 }
 
-// Close releases the producers held by the registry.
 func (p *Publisher) Close() error {
 	return p.registry.Close()
 }

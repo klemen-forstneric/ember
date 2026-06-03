@@ -13,6 +13,14 @@ import (
 // messages into a single channel.
 var _ ember.Transport = (*Subscriber)(nil)
 
+// consumerRegistry resolves the consumers for a subscription name (fan-in:
+// one subscription may map to several consumers). Get returns an error for an
+// unknown subscription.
+type consumerRegistry interface {
+	Get(ctx context.Context, subscription string) ([]consumer, error)
+	Close() error
+}
+
 type Subscriber struct {
 	registry consumerRegistry
 	logger   ember.LoggerCtx
@@ -41,11 +49,12 @@ func (s *Subscriber) Subscribe(ctx context.Context, name string) (<-chan ember.A
 		s.wg.Add(1)
 		go func(c consumer) {
 			defer s.wg.Done()
+
 			for {
 				select {
-				case cmsg := <-c.Chan():
+				case msg := <-c.Chan():
 					var m message
-					if err := json.Unmarshal(cmsg.Payload(), &m); err != nil {
+					if err := json.Unmarshal(msg.Payload(), &m); err != nil {
 						s.logger.Error(ctx, "Could not unmarshal the message", err)
 						continue
 					}
@@ -54,16 +63,21 @@ func (s *Subscriber) Subscribe(ctx context.Context, name string) (<-chan ember.A
 					if metadata == nil {
 						metadata = make(ember.Metadata)
 					}
-					metadata[MetadataKeyCurrentDelivery] = int(cmsg.RedeliveryCount())
-					metadata[MetadataKeyMaxDeliveries] = c.MaxDeliveries()
-					metadata[MetadataKeyCorrelationID] = m.CorrelationID
 
-					msg := cmsg.Message
+					metadata[MetadataKeyCorrelationID] = m.CorrelationID
+					metadata[MetadataKeyCurrentDelivery] = int(msg.RedeliveryCount() + 1)
+					if v, ok := c.MaxDeliveries(); ok {
+						metadata[MetadataKeyMaxDeliveries] = v
+					}
+
 					envelope := ember.AckableEventEnvelope{
 						EventEnvelope: ember.EventEnvelope{
-							ID:        m.ID,
-							EntityID:  m.EntityID,
-							Event:     &ember.MarshaledEvent{Type: m.Type, Data: m.Data},
+							ID:       m.ID,
+							EntityID: m.EntityID,
+							Event: &ember.MarshaledEvent{
+								Type: m.Type,
+								Data: m.Data,
+							},
 							Metadata:  metadata,
 							Timestamp: m.PublishedAt,
 						},
@@ -90,13 +104,12 @@ func (s *Subscriber) Subscribe(ctx context.Context, name string) (<-chan ember.A
 	return out, nil
 }
 
-// Stop signals all forwarding goroutines to exit, waits for them to drain, then
-// releases the consumers via the registry. The out channels are intentionally
-// not closed: the downstream ember.Consumer terminates via its own Stop()/ctx.
 func (s *Subscriber) Stop() {
+	ctx := context.Background()
+
 	close(s.shutdown)
 	s.wg.Wait()
 	if err := s.registry.Close(); err != nil {
-		s.logger.Error(context.Background(), "Could not close consumer registry", err)
+		s.logger.Error(ctx, "Could not close consumer registry", err)
 	}
 }

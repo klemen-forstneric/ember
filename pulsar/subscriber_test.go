@@ -56,8 +56,8 @@ func TestSubscribeForwardsAndStampsMetadata(t *testing.T) {
 		if env.EntityID != "e1" {
 			t.Errorf("entity id: got %q", env.EntityID)
 		}
-		if got := env.Metadata[MetadataKeyCurrentDelivery]; got != 2 {
-			t.Errorf("current delivery: got %v, want 2", got)
+		if got := env.Metadata[MetadataKeyCurrentDelivery]; got != 3 {
+			t.Errorf("current delivery: got %v, want 3", got)
 		}
 		if got := env.Metadata[MetadataKeyMaxDeliveries]; got != 5 {
 			t.Errorf("max deliveries: got %v, want 5", got)
@@ -74,6 +74,34 @@ func TestSubscribeForwardsAndStampsMetadata(t *testing.T) {
 	if len(c.acked) != 1 {
 		t.Errorf("expected 1 ack, got %d", len(c.acked))
 	}
+}
+
+func TestSubscribeOmitsMaxDeliveriesWhenUncapped(t *testing.T) {
+	c := newUncappedConsumer()
+	reg := &fakeConsumerRegistry{subs: map[string][]consumer{
+		"projector": {c},
+	}}
+	s := NewSubscriber(reg, ember.NopLogger)
+
+	out, err := s.Subscribe(context.Background(), "projector")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	c.in <- msgFor(t, "order.created", "e1", "corr-1", 0)
+
+	select {
+	case env := <-out:
+		if got := env.Metadata[MetadataKeyCurrentDelivery]; got != 1 {
+			t.Errorf("current delivery: got %v, want 1", got)
+		}
+		if _, ok := env.Metadata[MetadataKeyMaxDeliveries]; ok {
+			t.Error("max_deliveries should be absent when there is no cap")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for an envelope")
+	}
+	s.Stop()
 }
 
 func TestSubscribeFansInMultipleConsumers(t *testing.T) {
