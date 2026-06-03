@@ -24,6 +24,15 @@ func TestConsumerRegistryUnknownSubscriptionErrors(t *testing.T) {
 	}
 }
 
+func TestConsumerRegistryEmptyTopicsErrors(t *testing.T) {
+	reg := NewConsumerRegistry([]string{"localhost:9092"}, map[string]SubscriptionConfig{
+		"projector": {}, // no topics configured
+	})
+	if _, err := reg.Get(context.Background(), "projector"); err == nil {
+		t.Fatal("expected an error when a subscription configures no topics")
+	}
+}
+
 func TestConsumerRegistryGetReturnsConfiguredReader(t *testing.T) {
 	reg := NewConsumerRegistry([]string{"localhost:9092"}, map[string]SubscriptionConfig{
 		"projector": {Topics: []string{"orders"}, MaxDeliveries: 5},

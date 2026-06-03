@@ -77,10 +77,14 @@ func (r *ConsumerRegistry) Get(_ context.Context, subscription string) (reader, 
 
 	rc := kafka.ReaderConfig{Brokers: r.brokers, GroupID: groupID}
 	// A consumer-group reader takes Topic for a single topic or GroupTopics for
-	// several; setting both panics, so pick exactly one.
-	if len(cfg.Topics) == 1 {
+	// several; setting both (or neither) panics in kafka.NewReader, so pick
+	// exactly one and reject an empty topic list with a clear error.
+	switch len(cfg.Topics) {
+	case 0:
+		return nil, fmt.Errorf("subscription %q: Topics must not be empty", subscription)
+	case 1:
 		rc.Topic = cfg.Topics[0]
-	} else {
+	default:
 		rc.GroupTopics = cfg.Topics
 	}
 
