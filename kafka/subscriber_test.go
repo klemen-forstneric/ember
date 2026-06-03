@@ -295,13 +295,69 @@ func TestSubscribeNackAfterStopIsSafeNoop(t *testing.T) {
 	s.Stop()
 
 	// A downstream handler may still nack after the transport has stopped
-	// (ember stops the transport before the consumer). This must not panic
-	// (no wg.Add after wg.Wait) and must not schedule a redelivery.
+	// (ember stops the transport before the consumer). This must not panic and
+	// must not schedule a redelivery: the retry loop has already exited, so the
+	// enqueued message is simply never re-delivered (its offset stays
+	// uncommitted and Kafka redelivers it later).
 	env.Nack()
 
 	select {
 	case <-out:
 		t.Fatal("did not expect a redelivery after Stop")
 	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestSubscribeRetriesMultipleNackedMessages(t *testing.T) {
+	r := newFakeReader(5, true)
+	// A backoff well above the time to read three channel messages guarantees
+	// the three initial deliveries (current_delivery 1) are all received before
+	// any redelivery (current_delivery 2) is re-emitted, making the assertions
+	// below order-independent of the retry loop.
+	r.backoff = 50 * time.Millisecond
+	reg := &fakeConsumerRegistry{readers: map[string]reader{"projector": r}}
+	s := NewSubscriber(reg, ember.NopLogger)
+
+	out, err := s.Subscribe(context.Background(), "projector")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	// Three messages on one partition. Each is delivered, nacked once, then
+	// re-delivered by the single retry loop (no goroutine per message).
+	r.in <- kafkaMsgFor(t, 0, 1, "order.created", "e1", "c")
+	r.in <- kafkaMsgFor(t, 0, 2, "order.created", "e2", "c")
+	r.in <- kafkaMsgFor(t, 0, 3, "order.created", "e3", "c")
+
+	for i := 0; i < 3; i++ {
+		select {
+		case env := <-out:
+			if got := env.Metadata[MetadataKeyCurrentDelivery]; got != 1 {
+				t.Errorf("first delivery current_delivery: got %v, want 1", got)
+			}
+			env.Nack()
+		case <-time.After(time.Second):
+			t.Fatal("timed out on first deliveries")
+		}
+	}
+
+	// All three are re-delivered (attempt 2) via the retry queue; ack each.
+	for i := 0; i < 3; i++ {
+		select {
+		case env := <-out:
+			if got := env.Metadata[MetadataKeyCurrentDelivery]; got != 2 {
+				t.Errorf("redelivery current_delivery: got %v, want 2", got)
+			}
+			env.Ack()
+		case <-time.After(time.Second):
+			t.Fatal("timed out on redeliveries")
+		}
+	}
+
+	s.Stop()
+
+	commits := r.commits()
+	if len(commits) != 3 || commits[2].Offset != 3 {
+		t.Errorf("expected three contiguous commits ending at offset 3, got %+v", commits)
 	}
 }

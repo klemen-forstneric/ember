@@ -78,7 +78,8 @@ attempts); any change to the root `ember` event model, `Consumer`, or middleware
    multi-topic, multi-partition assignment inside one member, so the Pulsar-style
    "one consumer per topic, fan in" is unnecessary. The `consumerRegistry` returns
    a **single `reader`** per subscription (honest cardinality), and the
-   `Subscriber` runs one manager goroutine per subscription — no fan-in.
+   `Subscriber` runs one session (a fetch loop + a retry loop) per subscription —
+   no fan-in.
 
 4. **Horizontal scaling is the consumer group.** Run N ember replicas (e.g. k8s)
    with the **same `GroupID`** per subscription; Kafka distributes the
@@ -241,42 +242,54 @@ The retry backoff is per-subscription and read off the reader
 `Subscribe(ctx, name) (<-chan ember.AckableEventEnvelope, error)`:
 
 1. `r, err := s.registry.Get(ctx, name)`; on error return it.
-2. Create one `out` channel and spawn one **manager goroutine** for the reader.
+2. Create one `out` channel and start a per-subscription **session** with two
+   goroutines — a **fetch loop** and a single **retry loop** — fanning into `out`.
 3. Return `out`.
 
-The manager goroutine keeps **per-partition state**, mutex-guarded:
+The session keeps **per-partition state** in an `offsetTracker`, mutex-guarded:
 
 - `attempts map[int64]int` — delivery count per offset,
 - `done map[int64]bool` — offsets that are finished (acked **or** given-up),
-- a `committed` watermark (highest offset such that it and all lower seen offsets
-  are `done`).
+- a per-partition `cursor` watermark (lowest uncommitted offset; commits advance
+  it across the contiguous run of `done` offsets).
+
+It also holds an in-memory **retry queue** (`[]retryMessage{m, readyAt}`,
+mutex-guarded) plus a buffered(1) wakeup channel.
 
 Behavior:
 
-- **Fetch loop:** `FetchMessage` → register the offset (`attempts=1`) → unmarshal
-  the `message` (on failure: log, mark the offset `done`, and advance the
-  watermark/commit past it — a malformed frame is poison and will be malformed on
-  every redelivery, so dropping it is the only way to avoid stalling the
-  partition) → build the `AckableEventEnvelope` with `Ack`/`Nack` closures
-  capturing
-  `(topic, partition, offset)` and the `kafka.Message` → forward to `out`, bailing
-  on `<-s.shutdown`.
-- **Stamp metadata** as it forwards: `correlation_id` from the payload,
-  `current_delivery = attempts[offset]`, and `max_deliveries` iff `capped`.
+- **Fetch loop:** `FetchMessage` → register the offset (`attempts=1`) → `deliver`.
+- **`deliver`:** unmarshal the `message` (on failure: log, mark the offset `done`,
+  and commit past it — a malformed frame is poison and will be malformed on every
+  redelivery, so dropping it is the only way to avoid stalling the partition) →
+  stamp metadata (`correlation_id`, `current_delivery = attempts[offset]`, and
+  `max_deliveries` iff `capped`) → build the `AckableEventEnvelope` with
+  `Ack`/`Nack` closures capturing the `kafka.Message` → forward to `out`, bailing
+  on `<-ctx.Done()`.
 - **Ack(offset):** mark `done`; advance the watermark across the contiguous run of
   `done` offsets; if it advanced, `CommitMessages` the highest contiguous message.
-- **Nack(offset), under cap (or uncapped):** `attempts++`; schedule a re-emit of
-  the same envelope onto `out` after `backoff` (tracked by `wg`, respecting
-  `shutdown`).
+- **Nack(offset), under cap (or uncapped):** `attempts++` and **append the message
+  to the retry queue** with `readyAt = now + backoff`, then send a non-blocking
+  wakeup. Enqueue is **non-blocking** — it must never block the downstream worker,
+  because the retry loop re-delivers through the same `out` and would otherwise
+  deadlock waiting on a worker stuck in `Nack`.
+- **Retry loop:** waits for the head message's `readyAt` (backoff is constant per
+  reader, so the FIFO queue is `readyAt`-ordered), then `attempts++` via the
+  tracker and re-`deliver`s it. One retry loop per reader — not a goroutine +
+  timer per nacked message.
 - **Nack(offset), cap reached:** **give up** — log + drop, mark `done`, advance
   watermark/commit so the partition keeps moving.
+
+Both goroutines are registered on the Subscriber's `wg` in `Subscribe` (before any
+`Stop`/`Wait`), and `Nack` never touches `wg` — so no `wg.Add` can race `wg.Wait`,
+and the lifecycle needs no separate "stopped" guard.
 
 `Stop()`:
 
 ```go
 func (s *Subscriber) Stop() {
-    close(s.shutdown)
-    s.wg.Wait() // fetch + retry goroutines drained
+    s.cancel()  // unblocks FetchMessage, retry-loop waits, and out-sends
+    s.wg.Wait() // fetch + retry loops of every session drained
     if err := s.registry.Close(); err != nil {
         s.logger.Error(context.Background(), "Could not close consumer registry", err)
     }
@@ -310,7 +323,7 @@ partition from this replica:
 | Publish: `WriteMessages` fails | returned from `Publish` |
 | Subscribe: unknown subscription name | `registry.Get` errors → `Subscribe` returns it |
 | Subscribe: malformed Kafka payload | log + drop: mark done, commit past it (poison frame; never deliverable, so it must not stall the partition) |
-| Nack under cap | re-emit after backoff, `attempts++` |
+| Nack under cap | enqueue to the retry queue (non-blocking), `attempts++`; retry loop re-emits after backoff |
 | Nack at cap | drop + log, mark done, commit past — partition not stalled |
 | No cap configured | unbounded in-session retry; `max_deliveries` omitted; poison-stall risk documented |
 | `CommitMessages` after partition revoked | log + continue |
