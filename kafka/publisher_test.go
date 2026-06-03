@@ -65,6 +65,7 @@ func TestPublishMultipleTopicsInOneBatch(t *testing.T) {
 	if !topics["orders"] || !topics["payments"] {
 		t.Errorf("expected both topics, got %v", topics)
 	}
+
 }
 
 func TestPublishUnmappedTypeErrors(t *testing.T) {
