@@ -36,4 +36,10 @@ func TestMessageJSONRoundTrip(t *testing.T) {
 	if string(out.Data) != string(in.Data) {
 		t.Errorf("data mismatch: got %s", out.Data)
 	}
+	if !out.PublishedAt.Equal(in.PublishedAt) {
+		t.Errorf("PublishedAt mismatch: got %v, want %v", out.PublishedAt, in.PublishedAt)
+	}
+	if v := out.Metadata[MetadataKeyCorrelationID]; v != in.Metadata[MetadataKeyCorrelationID] {
+		t.Errorf("Metadata mismatch: got %v, want %v", v, in.Metadata[MetadataKeyCorrelationID])
+	}
 }
