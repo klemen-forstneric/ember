@@ -72,15 +72,23 @@ This (PK=`type`, SK=`id`) makes `Get` a `GetItem` and `List` an efficient
 
 ### `data` storage — document map (full filter parity)
 
-`MarshaledEntity.Data` is `[]byte` of JSON. On `Save` we `json.Unmarshal` it
-into a Go value and convert it to a DynamoDB document map (`M`) so that
+`MarshaledEntity.Data` is `[]byte` of JSON. On `Save` we decode it into a Go
+value and convert it to a DynamoDB document map (`M`) so that
 `FilterExpression` can reach into nested paths (parity with Mongo's nested BSON
 and Postgres's JSONB). On `Get`/`List` we convert the map back and
 `json.Marshal` it to repopulate `MarshaledEntity.Data`.
 
-Known limitation (accepted): JSON's type model is lossy — all numbers
-round-trip as floating point. This is inherent to going through `encoding/json`
-and is acceptable for this design.
+**Number precision.** Decode with a `json.Decoder` configured via
+`UseNumber()`, so JSON numbers become `json.Number` (an exact decimal string)
+rather than `float64`. Store them in DynamoDB's native numeric type (`N`), which
+holds up to 38 significant digits — covering the full `int64`/`uint64` range.
+This preserves large integers (e.g. snowflake IDs, counters) exactly; the naive
+`interface{}` decode would silently corrupt integers above 2^53.
+
+Known limitation (accepted): object key ordering is not preserved across the
+round-trip. This is semantically irrelevant — the `EntityMarshaler` matches by
+field name — and matches the existing backends (Postgres JSONB and Mongo
+ExtJSON both reorder keys).
 
 ## Methods
 
@@ -165,6 +173,10 @@ built expression's condition string plus its `ExpressionAttributeNames` and
 - unsupported value type → `ErrUnsupportedFilter`;
 - nil/empty filter behavior;
 - compile-time assertion: `var _ ember.EntityRepository = (*EntityRepository)(nil)`.
+
+The `data` JSON↔AttributeValue-map conversion helpers are pure functions and
+are unit-tested directly (no DynamoDB needed), including a round-trip case for
+an integer above 2^53 to confirm `UseNumber()` + `N` storage preserves it.
 
 ## Out of scope
 
