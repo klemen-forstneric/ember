@@ -25,6 +25,14 @@ type partition struct {
 // offsetTracker owns the per-partition state for one reader. All methods are
 // safe for concurrent use: Ack/Nack closures run on downstream worker
 // goroutines while the fetch loop registers new offsets.
+//
+// The tracker assumes a partition's offsets are delivered contiguously and in
+// increasing order from the committed baseline — true for kafka-go consumer
+// groups reading standard topics in the default ReadUncommitted mode. Gaps
+// (e.g. transaction markers or log compaction, neither used here) would stall a
+// partition's watermark at the first missing offset. Callers must only complete
+// offsets they registered; completing an unregistered offset records a done
+// entry the cursor can never reach.
 type offsetTracker struct {
 	mu    sync.Mutex
 	parts map[partitionKey]*partition
@@ -61,7 +69,9 @@ func (t *offsetTracker) register(m kafka.Message) int {
 	return 1
 }
 
-// attempt returns the current 1-based attempt number for m's offset.
+// attempt returns the current 1-based attempt number for m's offset, or 0 if
+// the offset was never registered. The Subscriber only calls this for a message
+// it has already registered, so it always sees a value >= 1.
 func (t *offsetTracker) attempt(m kafka.Message) int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
