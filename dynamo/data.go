@@ -7,9 +7,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
-// marshalData decodes the entity's JSON data into a DynamoDB document map.
-// Numbers are decoded with UseNumber so large integers are not rounded through
-// float64; they are stored in the native numeric type (N).
+// marshalData decodes the entity's JSON data into a DynamoDB document map. The
+// data is expected to be a JSON object (as produced by an EntityMarshaler);
+// empty/nil input or JSON null yields an empty map, and a non-object top-level
+// value returns a decode error. Numbers are decoded with UseNumber so large
+// integers are not rounded through float64; they are stored in the native
+// numeric type (N).
 func marshalData(b []byte) (map[string]types.AttributeValue, error) {
 	if len(b) == 0 {
 		return map[string]types.AttributeValue{}, nil
