@@ -30,7 +30,7 @@ func (w *fakeWriter) WriteMessages(_ context.Context, msgs ...kafka.Message) err
 
 func (w *fakeWriter) Close() error {
 	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.closed = true
-	w.mu.Unlock()
 	return nil
 }
