@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/klemen-forstneric/ember"
-	"github.com/klemen-forstneric/ember/correlationid"
+	"github.com/klemen-forstneric/ember/correlation"
 )
 
 const (
@@ -22,7 +22,7 @@ func CorrelationID(l ember.LoggerCtx) ember.SubscriptionMiddleware {
 					"event_id", e.ID, "metadata", e.Metadata, "correlation_id", correlationID)
 			}
 
-			ctx = correlationid.NewContext(ctx, correlationID)
+			ctx = correlation.NewContext(ctx, correlationID)
 			return next(ctx, e)
 		}
 	}

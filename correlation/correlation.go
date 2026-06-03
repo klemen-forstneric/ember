@@ -1,4 +1,4 @@
-package correlationid
+package correlation
 
 import (
 	"context"
