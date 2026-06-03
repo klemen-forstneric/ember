@@ -50,7 +50,7 @@ func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) e
 	return err
 }
 
-func (r *EntityRepository) Load(ctx context.Context, typ, id string) (*ember.MarshaledEntity, error) {
+func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.MarshaledEntity, error) {
 	filter := bson.D{
 		{Key: "_id", Value: id},
 		{Key: "type", Value: typ},
@@ -82,4 +82,55 @@ func (r *EntityRepository) Load(ctx context.Context, typ, id string) (*ember.Mar
 		Version: ember.NewVersion(e.Version),
 		Data:    data,
 	}, nil
+}
+
+func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter) ([]*ember.MarshaledEntity, error) {
+	predicate, err := buildFilter(f)
+	if err != nil {
+		return nil, err
+	}
+
+	filter := bson.D{{Key: "type", Value: typ}}
+	if len(predicate) > 0 {
+		filter = bson.D{{Key: "$and", Value: bson.A{
+			bson.D{{Key: "type", Value: typ}},
+			predicate,
+		}}}
+	}
+
+	cur, err := r.collection.Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+
+	var out []*ember.MarshaledEntity
+	for cur.Next(ctx) {
+		var e struct {
+			ID      string   `bson:"_id"`
+			Type    string   `bson:"type"`
+			Version uint64   `bson:"version"`
+			Data    bson.Raw `bson:"data"`
+		}
+		if err := cur.Decode(&e); err != nil {
+			return nil, err
+		}
+
+		data, err := bson.MarshalExtJSON(e.Data, false, false)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, &ember.MarshaledEntity{
+			ID:      e.ID,
+			Type:    e.Type,
+			Version: ember.NewVersion(e.Version),
+			Data:    data,
+		})
+	}
+	if err := cur.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
 }
