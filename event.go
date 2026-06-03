@@ -17,6 +17,11 @@ type EventMarshaler interface {
 	Unmarshal(ctx context.Context, e *MarshaledEvent) (Event, error)
 }
 
+// EventRepository
+type EventRepository interface {
+	Save(ctx context.Context, envelopes []EventEnvelope) error
+}
+
 // EventEnvelope
 type EventEnvelope struct {
 	ID        string

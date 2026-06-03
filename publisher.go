@@ -10,21 +10,16 @@ type IDer interface {
 	ID() string
 }
 
-// Repository
-type Repository interface {
-	Save(ctx context.Context, envelopes []EventEnvelope) error
-}
-
 // Publisher
 type Publisher struct {
 	ider       IDer
-	repository Repository
+	repository EventRepository
 	metadata   MetadataGetter
 	marshaler  EventMarshaler
 	notifier   Notifier
 }
 
-func NewPublisher(i IDer, r Repository, mg MetadataGetter, m EventMarshaler, n Notifier) *Publisher {
+func NewPublisher(i IDer, r EventRepository, mg MetadataGetter, m EventMarshaler, n Notifier) *Publisher {
 	return &Publisher{
 		ider:       i,
 		repository: r,
