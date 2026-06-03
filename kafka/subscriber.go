@@ -29,6 +29,9 @@ type Subscriber struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	mu      sync.Mutex
+	stopped bool
 }
 
 func NewSubscriber(r consumerRegistry, l ember.LoggerCtx) *Subscriber {
@@ -125,7 +128,19 @@ func (s *Subscriber) nack(r reader, tracker *offsetTracker, out chan<- ember.Ack
 		return
 	}
 
+	// Guard the wg.Add with the stopped flag. Downstream handlers can call Nack
+	// while Stop is already in wg.Wait(); without this guard, wg.Add would race
+	// wg.Wait and panic. Stop sets stopped under s.mu before Wait, so any Add
+	// here happens-before Wait. After stop, the offset is left uncommitted and
+	// Kafka redelivers it later (at-least-once).
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return
+	}
 	s.wg.Add(1)
+	s.mu.Unlock()
+
 	go func() {
 		defer s.wg.Done()
 		select {
@@ -152,6 +167,10 @@ func (s *Subscriber) commit(r reader, tracker *offsetTracker, m kafka.Message) {
 }
 
 func (s *Subscriber) Stop() {
+	s.mu.Lock()
+	s.stopped = true
+	s.mu.Unlock()
+
 	s.cancel()
 	s.wg.Wait()
 	if err := s.registry.Close(); err != nil {

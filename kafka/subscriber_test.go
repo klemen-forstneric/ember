@@ -272,3 +272,36 @@ func TestStopClosesRegistry(t *testing.T) {
 		t.Errorf("expected registry Close called once, got %d", reg.closeCalls)
 	}
 }
+
+func TestSubscribeNackAfterStopIsSafeNoop(t *testing.T) {
+	r := newFakeReader(3, true)
+	reg := &fakeConsumerRegistry{readers: map[string]reader{"projector": r}}
+	s := NewSubscriber(reg, ember.NopLogger)
+
+	out, err := s.Subscribe(context.Background(), "projector")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	r.in <- kafkaMsgFor(t, 0, 1, "order.created", "e1", "c")
+
+	var env ember.AckableEventEnvelope
+	select {
+	case env = <-out:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for an envelope")
+	}
+
+	s.Stop()
+
+	// A downstream handler may still nack after the transport has stopped
+	// (ember stops the transport before the consumer). This must not panic
+	// (no wg.Add after wg.Wait) and must not schedule a redelivery.
+	env.Nack()
+
+	select {
+	case <-out:
+		t.Fatal("did not expect a redelivery after Stop")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
