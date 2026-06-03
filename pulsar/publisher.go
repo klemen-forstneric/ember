@@ -28,7 +28,7 @@ func NewPublisher(r producerRegistry) *Publisher {
 	return &Publisher{registry: r}
 }
 
-func (p *Publisher) Publish(ctx context.Context, envelopes ...ember.EventEnvelope) error {
+func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope) error {
 	if len(envelopes) == 0 {
 		return nil
 	}

@@ -28,7 +28,7 @@ func NewPublisher(w writer, routes map[string]string) *Publisher {
 	return &Publisher{w: w, routes: routes}
 }
 
-func (p *Publisher) Publish(ctx context.Context, envelopes ...ember.EventEnvelope) error {
+func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope) error {
 	if len(envelopes) == 0 {
 		return nil
 	}

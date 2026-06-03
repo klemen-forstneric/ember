@@ -9,14 +9,14 @@ import (
 	"github.com/klemen-forstneric/ember"
 )
 
-func envelope(eventType, entityID string) ember.EventEnvelope {
-	return ember.EventEnvelope{
+func envelope(eventType, entityID string) []ember.EventEnvelope {
+	return []ember.EventEnvelope{{
 		ID:        "evt-1",
 		EntityID:  entityID,
 		Event:     &ember.MarshaledEvent{Type: eventType, Data: []byte(`{"k":"v"}`)},
 		Metadata:  ember.Metadata{MetadataKeyCorrelationID: "corr-1"},
 		Timestamp: time.Unix(0, 0).UTC(),
-	}
+	}}
 }
 
 func TestPublishRoutesByEventType(t *testing.T) {
@@ -55,7 +55,7 @@ func TestPublishMissingCorrelationIDErrors(t *testing.T) {
 	p := NewPublisher(reg)
 
 	e := envelope("order.created", "e1")
-	e.Metadata = ember.Metadata{} // no correlation id
+	e[0].Metadata = ember.Metadata{} // no correlation id
 
 	if err := p.Publish(context.Background(), e); err == nil {
 		t.Fatal("expected an error for missing correlation id")
@@ -76,7 +76,7 @@ func TestPublishAggregatesSendErrors(t *testing.T) {
 func TestPublishEmptyIsNoop(t *testing.T) {
 	reg := newFakeProducerRegistry()
 	p := NewPublisher(reg)
-	if err := p.Publish(context.Background()); err != nil {
+	if err := p.Publish(context.Background(), []ember.EventEnvelope{}); err != nil {
 		t.Fatalf("expected nil for empty publish, got %v", err)
 	}
 }
