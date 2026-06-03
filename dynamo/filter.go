@@ -172,8 +172,10 @@ func attrName(path string) (name expression.NameBuilder, reserved bool, err erro
 // alwaysTrue / alwaysFalse encode logical identities. version is always present
 // (every item carries it) and is not a key attribute, so it is safe to reference
 // in a FilterExpression.
-func alwaysTrue() expression.ConditionBuilder  { return expression.Name("version").AttributeExists() }
-func alwaysFalse() expression.ConditionBuilder { return expression.Name("version").AttributeNotExists() }
+func alwaysTrue() expression.ConditionBuilder { return expression.Name("version").AttributeExists() }
+func alwaysFalse() expression.ConditionBuilder {
+	return expression.Name("version").AttributeNotExists()
+}
 
 // normalizeValue validates a filter value and converts time.Time to RFC3339Nano
 // text, matching how time is serialized into the stored JSON data.

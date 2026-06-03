@@ -251,5 +251,63 @@ func TestBuildFilterRejectsKeyAttribute(t *testing.T) {
 	}
 }
 
+func TestBuildFilterMembershipReservedVersion(t *testing.T) {
+	// In on the reserved version attribute: no data. prefix, no guard.
+	gotExpr, gotNames, gotVals := build(t, ember.In("version", 1, 2))
+	if gotExpr != "#0 IN (:0, :1)" {
+		t.Errorf("expr: got %q", gotExpr)
+	}
+	if !reflect.DeepEqual(gotNames, map[string]string{"#0": "version"}) {
+		t.Errorf("names: got %#v", gotNames)
+	}
+	if !reflect.DeepEqual(gotVals, map[string]types.AttributeValue{":0": nN("1"), ":1": nN("2")}) {
+		t.Errorf("values: got %#v", gotVals)
+	}
+}
+
+func TestBuildFilterExistenceReservedVersion(t *testing.T) {
+	// version is always present and non-null, so existence is unguarded.
+	t.Run("true", func(t *testing.T) {
+		gotExpr, gotNames, _ := build(t, ember.Exists("version", true))
+		if gotExpr != "attribute_exists (#0)" {
+			t.Errorf("expr: got %q", gotExpr)
+		}
+		if !reflect.DeepEqual(gotNames, map[string]string{"#0": "version"}) {
+			t.Errorf("names: got %#v", gotNames)
+		}
+	})
+	t.Run("false", func(t *testing.T) {
+		gotExpr, gotNames, _ := build(t, ember.Exists("version", false))
+		if gotExpr != "attribute_not_exists (#0)" {
+			t.Errorf("expr: got %q", gotExpr)
+		}
+		if !reflect.DeepEqual(gotNames, map[string]string{"#0": "version"}) {
+			t.Errorf("names: got %#v", gotNames)
+		}
+	})
+}
+
+func TestBuildFilterSingleChildOrCollapses(t *testing.T) {
+	gotExpr, _, _ := build(t, ember.Or(ember.Eq("a", "1")))
+	if gotExpr != "#0.#1 = :0" {
+		t.Errorf("expr: got %q", gotExpr)
+	}
+}
+
+func TestBuildFilterNotOfNe(t *testing.T) {
+	// Not of the compound Ne; delegates to expression.Not over the guarded AND.
+	gotExpr, gotNames, gotVals := build(t, ember.Not(ember.Ne("status", "open")))
+	want := "NOT ((attribute_exists (#0.#1)) AND (NOT (attribute_type (#0.#1, :0))) AND (#0.#1 <> :1))"
+	if gotExpr != want {
+		t.Errorf("expr: got %q, want %q", gotExpr, want)
+	}
+	if !reflect.DeepEqual(gotNames, map[string]string{"#0": "data", "#1": "status"}) {
+		t.Errorf("names: got %#v", gotNames)
+	}
+	if !reflect.DeepEqual(gotVals, map[string]types.AttributeValue{":0": sS("NULL"), ":1": sS("open")}) {
+		t.Errorf("values: got %#v", gotVals)
+	}
+}
+
 // Compile-time assertion that the repository satisfies the interface.
 var _ ember.EntityRepository = (*EntityRepository)(nil)
