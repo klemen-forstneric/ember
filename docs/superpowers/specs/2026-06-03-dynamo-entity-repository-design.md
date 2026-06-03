@@ -42,6 +42,11 @@ dynamo/
 - `github.com/aws/aws-sdk-go-v2/service/dynamodb/types`
 - `github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression`
 
+The `feature/dynamodb/attributevalue` package is intentionally **not** used:
+its default decode turns JSON numbers into `float64`, which would defeat the
+integer-precision goal. The `data` conversion is hand-rolled instead (see
+below), giving exact `json.Number` ↔ `N` round-trips in both directions.
+
 The caller constructs and owns the `*dynamodb.Client` (matching how `mongo`
 takes a `*mongo.Collection` and `postgres` takes a `*sql.DB`).
 
@@ -137,22 +142,53 @@ empty. Each returned item's `data` map is converted back to JSON bytes. Returns
 ## Filter translation (`buildFilter`)
 
 Recursive walk over the sealed `Filter` sum type (`filter.go` in the root
-package), producing an `expression.ConditionBuilder`:
+package), producing an `expression.ConditionBuilder` for use as a
+`FilterExpression`:
 
-- **Path mapping:** reserved paths `type` / `id` / `version` → top-level
-  attribute names; any other path → nested document path under `data`
-  (e.g. `address.city` → `expression.Name("data.address.city")`).
+- **Path mapping:** `version` → top-level attribute name (a plain, always-present
+  non-key attribute, safe in a `FilterExpression`); any non-reserved path →
+  nested document path under `data` (e.g. `address.city` →
+  `expression.Name("data.address.city")`).
+- **Key-attribute paths rejected:** `id` and `type` are the table's sort/
+  partition keys, and **DynamoDB forbids key attributes in a
+  `FilterExpression`** — they belong in the `KeyConditionExpression`. A filter
+  referencing `id` or `type` therefore returns `ember.ErrUnsupportedFilter`.
+  This is an accepted divergence from Mongo/Postgres (which can filter on those
+  columns); in practice `List` already pins `type`, and id-as-filter is unusual.
 - **Operators:** `OpEq`/`OpNe`/`OpGt`/`OpGte`/`OpLt`/`OpLte` →
   `Equal`/`NotEqual`/`GreaterThan`/`GreaterThanEqual`/`LessThan`/`LessThanEqual`.
-- **Membership** (`In`) → `expression` `In`.
-- **Existence** (`Exists(path, true/false)`) → `AttributeExists` /
-  `AttributeNotExists`.
-- **Boolean** (`And`/`Or`/`Not`) → `And` / `Or` / `Not`.
+- **Membership** (`In`) → `expression` `In`. Empty `In` → an always-false
+  condition (matches Postgres `FALSE` / Mongo `$in: []`).
+- **Existence** (`Exists(path, true/false)`) → present-and-non-null /
+  its complement (see two-valued semantics below).
+- **Boolean** (`And`/`Or`/`Not`) → `And` / `Or` / `Not`. Empty `And` → an
+  always-true condition; empty `Or` → always-false (matching Mongo/Postgres).
+  A single-child `And`/`Or` collapses to the child (the `expression` builder
+  requires ≥2 operands for `And`/`Or`).
 - **Time normalization:** `time.Time` values normalized to RFC3339Nano strings,
   matching Mongo/Postgres.
 - **Unsupported value types** → `ember.ErrUnsupportedFilter`.
 - Reserved-word collisions are handled automatically by the `expression`
   builder via `ExpressionAttributeNames`.
+
+### Two-valued null/missing semantics
+
+The root `filter.go` contract (lines 24-30) requires that a path predicate is
+satisfied only when the path is present, non-null, and the comparison holds.
+JSON `null` is stored as a DynamoDB `NULL`-typed attribute (it exists), so:
+
+- **Positive comparisons** (`Eq`/`Gt`/`Gte`/`Lt`/`Lte`) and **membership** need
+  no guard: a missing attribute fails the comparison, and a `NULL`-typed
+  attribute fails it by type mismatch against the string/number operand.
+- **`Ne`** on a `data` path is guarded as
+  `attribute_exists(p) AND NOT attribute_type(p, NULL) AND p <> v`, so an
+  absent/null path does not match (the two-valued complement of `Eq`).
+- **`Exists(p, true)`** → `attribute_exists(p) AND NOT attribute_type(p, NULL)`;
+  **`Exists(p, false)`** → `attribute_not_exists(p) OR attribute_type(p, NULL)`.
+- `version` is always present and non-null, so its `Ne`/`Exists` need no guard.
+
+`null` JSON values are preserved on the round-trip (stored as `NULL`, returned
+as JSON `null`), matching Mongo/Postgres data fidelity.
 
 ## Error handling
 
