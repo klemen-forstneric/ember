@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/klemen-forstneric/ember"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/suite"
 )
 
 func envelope(eventType, entityID string) ember.EventEnvelope {
@@ -19,103 +21,93 @@ func envelope(eventType, entityID string) ember.EventEnvelope {
 	}
 }
 
-func TestPublishRoutesByEventType(t *testing.T) {
-	w := &fakeWriter{}
-	p := NewPublisher(w, map[string]string{"order.created": "orders"})
-
-	if err := p.Publish(context.Background(), []ember.EventEnvelope{envelope("order.created", "e1")}); err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
-
-	if len(w.written) != 1 {
-		t.Fatalf("expected 1 written message, got %d", len(w.written))
-	}
-	if w.written[0].Topic != "orders" {
-		t.Errorf("topic: got %q, want orders", w.written[0].Topic)
-	}
-	if string(w.written[0].Key) != "e1" {
-		t.Errorf("key: got %q, want e1", w.written[0].Key)
-	}
+type PublisherSuite struct {
+	suite.Suite
+	w *mockWriter
 }
 
-func TestPublishMultipleTopicsInOneBatch(t *testing.T) {
-	w := &fakeWriter{}
-	p := NewPublisher(w, map[string]string{
+func TestPublisherSuite(t *testing.T) {
+	suite.Run(t, new(PublisherSuite))
+}
+
+func (s *PublisherSuite) SetupTest() {
+	s.w = &mockWriter{}
+}
+
+func (s *PublisherSuite) TestRoutesByEventType() {
+	s.w.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
+	p := NewPublisher(s.w, map[string]string{"order.created": "orders"})
+
+	err := p.Publish(context.Background(), []ember.EventEnvelope{envelope("order.created", "e1")})
+	s.Require().NoError(err)
+
+	written := s.w.written()
+	s.Require().Len(written, 1)
+	s.Equal("orders", written[0].Topic)
+	s.Equal("e1", string(written[0].Key))
+}
+
+func (s *PublisherSuite) TestMultipleTopicsInOneBatch() {
+	s.w.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
+	p := NewPublisher(s.w, map[string]string{
 		"order.created":   "orders",
 		"payment.settled": "payments",
 	})
 
-	err := p.Publish(context.Background(),
-		[]ember.EventEnvelope{
-			envelope("order.created", "e1"),
-			envelope("payment.settled", "e2"),
-		},
-	)
-	if err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
+	err := p.Publish(context.Background(), []ember.EventEnvelope{
+		envelope("order.created", "e1"),
+		envelope("payment.settled", "e2"),
+	})
+	s.Require().NoError(err)
 
-	if w.calls != 1 {
-		t.Errorf("expected a single WriteMessages call, got %d", w.calls)
-	}
-	if len(w.written) != 2 {
-		t.Fatalf("expected 2 written messages, got %d", len(w.written))
-	}
-	topics := map[string]bool{w.written[0].Topic: true, w.written[1].Topic: true}
-	if !topics["orders"] || !topics["payments"] {
-		t.Errorf("expected both topics, got %v", topics)
-	}
-
+	// A multi-topic publish must be a single batched WriteMessages call.
+	s.w.AssertNumberOfCalls(s.T(), "WriteMessages", 1)
+	written := s.w.written()
+	s.Require().Len(written, 2)
+	topics := map[string]bool{written[0].Topic: true, written[1].Topic: true}
+	s.True(topics["orders"])
+	s.True(topics["payments"])
 }
 
-func TestPublishUnmappedTypeErrors(t *testing.T) {
-	w := &fakeWriter{}
-	p := NewPublisher(w, map[string]string{})
+func (s *PublisherSuite) TestUnmappedTypeErrors() {
+	p := NewPublisher(s.w, map[string]string{})
 
-	if err := p.Publish(context.Background(), []ember.EventEnvelope{envelope("payment.refunded", "e1")}); err == nil {
-		t.Fatal("expected an error for an unmapped event type")
-	}
+	err := p.Publish(context.Background(), []ember.EventEnvelope{envelope("payment.refunded", "e1")})
+	s.Error(err)
+	s.w.AssertNotCalled(s.T(), "WriteMessages")
 }
 
-func TestPublishMissingCorrelationIDErrors(t *testing.T) {
-	w := &fakeWriter{}
-	p := NewPublisher(w, map[string]string{"order.created": "orders"})
+func (s *PublisherSuite) TestMissingCorrelationIDErrors() {
+	p := NewPublisher(s.w, map[string]string{"order.created": "orders"})
 
 	e := envelope("order.created", "e1")
 	e.Metadata = ember.Metadata{} // no correlation id
 
-	if err := p.Publish(context.Background(), []ember.EventEnvelope{e}); err == nil {
-		t.Fatal("expected an error for missing correlation id")
-	}
+	err := p.Publish(context.Background(), []ember.EventEnvelope{e})
+	s.Error(err)
+	s.w.AssertNotCalled(s.T(), "WriteMessages")
 }
 
-func TestPublishPropagatesWriteError(t *testing.T) {
-	w := &fakeWriter{err: errors.New("boom")}
-	p := NewPublisher(w, map[string]string{"order.created": "orders"})
+func (s *PublisherSuite) TestPropagatesWriteError() {
+	s.w.On("WriteMessages", mock.Anything, mock.Anything).Return(errors.New("boom"))
+	p := NewPublisher(s.w, map[string]string{"order.created": "orders"})
 
-	if err := p.Publish(context.Background(), []ember.EventEnvelope{envelope("order.created", "e1")}); err == nil {
-		t.Fatal("expected the write error to propagate")
-	}
+	err := p.Publish(context.Background(), []ember.EventEnvelope{envelope("order.created", "e1")})
+	s.Error(err)
 }
 
-func TestPublishEmptyIsNoop(t *testing.T) {
-	w := &fakeWriter{}
-	p := NewPublisher(w, map[string]string{})
-	if err := p.Publish(context.Background(), []ember.EventEnvelope{}); err != nil {
-		t.Fatalf("expected nil for empty publish, got %v", err)
-	}
-	if w.calls != 0 {
-		t.Errorf("expected no WriteMessages calls, got %d", w.calls)
-	}
+func (s *PublisherSuite) TestEmptyIsNoop() {
+	p := NewPublisher(s.w, map[string]string{})
+
+	err := p.Publish(context.Background(), []ember.EventEnvelope{})
+	s.Require().NoError(err)
+	s.w.AssertNotCalled(s.T(), "WriteMessages")
 }
 
-func TestPublisherCloseClosesWriter(t *testing.T) {
-	w := &fakeWriter{}
-	p := NewPublisher(w, map[string]string{})
-	if err := p.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if !w.closed {
-		t.Error("expected the writer to be closed")
-	}
+func (s *PublisherSuite) TestCloseClosesWriter() {
+	s.w.On("Close").Return(nil)
+	p := NewPublisher(s.w, map[string]string{})
+
+	s.Require().NoError(p.Close())
+	s.w.AssertCalled(s.T(), "Close")
 }

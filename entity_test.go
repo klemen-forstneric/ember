@@ -3,11 +3,13 @@ package ember
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/suite"
 )
 
-// fakeEntity is a minimal Entity for store tests.
+// fakeEntity is a minimal Entity used as test data for store tests.
 type fakeEntity struct {
 	EntityRoot
 	Name string
@@ -19,118 +21,80 @@ func newFakeEntity(id string) *fakeEntity {
 
 func (e *fakeEntity) Type() string { return "fake" }
 
-// fakeMarshaler hydrates fakeEntity from a MarshaledEntity (ID + Version only).
-type fakeMarshaler struct{}
-
-func (fakeMarshaler) Marshal(_ context.Context, e *fakeEntity) (*MarshaledEntity, error) {
-	return &MarshaledEntity{ID: e.ID(), Type: e.Type(), Version: e.Version(), Data: []byte(e.Name)}, nil
+type EntityStoreSuite struct {
+	suite.Suite
+	ctx       context.Context
+	repo      *mockEntityRepository
+	marshaler *mockEntityMarshaler[*fakeEntity]
+	store     *EntityStore[*fakeEntity]
 }
 
-func (fakeMarshaler) Unmarshal(_ context.Context, m *MarshaledEntity) (*fakeEntity, error) {
-	e := newFakeEntity(m.ID)
-	e.Name = string(m.Data)
-	e.SetVersion(m.Version)
-	return e, nil
+func TestEntityStoreSuite(t *testing.T) {
+	suite.Run(t, new(EntityStoreSuite))
 }
 
-// failingMarshaler errors on Unmarshal to exercise List's per-item error branch.
-type failingMarshaler struct{}
-
-func (failingMarshaler) Marshal(_ context.Context, e *fakeEntity) (*MarshaledEntity, error) {
-	return nil, nil
+func (s *EntityStoreSuite) SetupTest() {
+	s.ctx = context.Background()
+	s.repo = &mockEntityRepository{}
+	s.marshaler = &mockEntityMarshaler[*fakeEntity]{}
+	s.store = NewEntityStore[*fakeEntity](s.repo, s.marshaler)
 }
 
-func (failingMarshaler) Unmarshal(_ context.Context, _ *MarshaledEntity) (*fakeEntity, error) {
-	return nil, errors.New("unmarshal boom")
+func (s *EntityStoreSuite) TearDownTest() {
+	s.repo.AssertExpectations(s.T())
+	s.marshaler.AssertExpectations(s.T())
 }
 
-// fakeRepo records calls and returns canned results.
-type fakeRepo struct {
-	getResult  *MarshaledEntity
-	getErr     error
-	listResult []*MarshaledEntity
-	listErr    error
-	gotType    string
-	gotFilter  Filter
-}
-
-func (r *fakeRepo) Save(_ context.Context, _ *MarshaledEntity) error { return nil }
-
-func (r *fakeRepo) Get(_ context.Context, typ, _ string) (*MarshaledEntity, error) {
-	r.gotType = typ
-	return r.getResult, r.getErr
-}
-
-func (r *fakeRepo) List(_ context.Context, typ string, f Filter) ([]*MarshaledEntity, error) {
-	r.gotType = typ
-	r.gotFilter = f
-	return r.listResult, r.listErr
-}
-
-func TestEntityStoreList(t *testing.T) {
-	repo := &fakeRepo{listResult: []*MarshaledEntity{
-		{ID: "1", Type: "fake", Version: NewVersion(3), Data: []byte("alice")},
-		{ID: "2", Type: "fake", Version: NewVersion(4), Data: []byte("bob")},
-	}}
-	store := NewEntityStore[*fakeEntity](repo, fakeMarshaler{})
+func (s *EntityStoreSuite) TestList() {
+	m1 := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(3), Data: []byte("alice")}
+	m2 := &MarshaledEntity{ID: "2", Type: "fake", Version: NewVersion(4), Data: []byte("bob")}
+	e1 := newFakeEntity("1")
+	e1.Name = "alice"
+	e2 := newFakeEntity("2")
+	e2.Name = "bob"
 
 	f := Eq("name", "alice")
-	got, err := store.List(context.Background(), f)
-	if err != nil {
-		t.Fatalf("List returned error: %v", err)
-	}
-	if repo.gotType != "fake" {
-		t.Errorf("repo received type %q, want %q", repo.gotType, "fake")
-	}
-	if !reflect.DeepEqual(repo.gotFilter, f) {
-		t.Errorf("repo received filter %#v, want %#v", repo.gotFilter, f)
-	}
-	if len(got) != 2 {
-		t.Fatalf("got %d entities, want 2", len(got))
-	}
-	if got[0].ID() != "1" || got[0].Name != "alice" {
-		t.Errorf("entity[0] = %+v, want id=1 name=alice", got[0])
-	}
-	if got[1].ID() != "2" || got[1].Name != "bob" {
-		t.Errorf("entity[1] = %+v, want id=2 name=bob", got[1])
-	}
+	// Expecting the store to forward the entity type and filter unchanged.
+	s.repo.On("List", mock.Anything, "fake", f).Return([]*MarshaledEntity{m1, m2}, nil)
+	s.marshaler.On("Unmarshal", mock.Anything, m1).Return(e1, nil)
+	s.marshaler.On("Unmarshal", mock.Anything, m2).Return(e2, nil)
+
+	got, err := s.store.List(s.ctx, f)
+
+	s.Require().NoError(err)
+	s.Equal([]*fakeEntity{e1, e2}, got)
 }
 
-func TestEntityStoreListError(t *testing.T) {
+func (s *EntityStoreSuite) TestListError() {
 	sentinel := errors.New("boom")
-	repo := &fakeRepo{listErr: sentinel}
-	store := NewEntityStore[*fakeEntity](repo, fakeMarshaler{})
+	s.repo.On("List", mock.Anything, "fake", mock.Anything).Return(nil, sentinel)
 
-	_, err := store.List(context.Background(), nil)
-	if !errors.Is(err, sentinel) {
-		t.Errorf("got error %v, want %v", err, sentinel)
-	}
+	_, err := s.store.List(s.ctx, nil)
+
+	s.ErrorIs(err, sentinel)
 }
 
-func TestEntityStoreListUnmarshalError(t *testing.T) {
-	repo := &fakeRepo{listResult: []*MarshaledEntity{
-		{ID: "1", Type: "fake", Version: NewVersion(1), Data: []byte("alice")},
-	}}
-	store := NewEntityStore[*fakeEntity](repo, failingMarshaler{})
+func (s *EntityStoreSuite) TestListUnmarshalError() {
+	m1 := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1), Data: []byte("alice")}
+	s.repo.On("List", mock.Anything, "fake", mock.Anything).Return([]*MarshaledEntity{m1}, nil)
+	s.marshaler.On("Unmarshal", mock.Anything, m1).Return(nil, errors.New("unmarshal boom"))
 
-	got, err := store.List(context.Background(), nil)
-	if err == nil {
-		t.Fatal("List should return error when Unmarshal fails")
-	}
-	if got != nil {
-		t.Errorf("List should return nil slice on error, got %#v", got)
-	}
+	got, err := s.store.List(s.ctx, nil)
+
+	s.Require().Error(err)
+	s.Nil(got)
 }
 
-func TestEntityStoreGet(t *testing.T) {
-	repo := &fakeRepo{getResult: &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(3), Data: []byte("alice")}}
-	store := NewEntityStore[*fakeEntity](repo, fakeMarshaler{})
+func (s *EntityStoreSuite) TestGet() {
+	m1 := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(3), Data: []byte("alice")}
+	e1 := newFakeEntity("1")
+	e1.Name = "alice"
+	// Get derives the entity type ("fake") from the zero entity and forwards it.
+	s.repo.On("Get", mock.Anything, "fake", "1").Return(m1, nil)
+	s.marshaler.On("Unmarshal", mock.Anything, m1).Return(e1, nil)
 
-	got, err := store.Get(context.Background(), "1")
-	if err != nil {
-		t.Fatalf("Get returned error: %v", err)
-	}
-	if got.ID() != "1" || got.Name != "alice" {
-		t.Errorf("entity = %+v, want id=1 name=alice", got)
-	}
+	got, err := s.store.Get(s.ctx, "1")
+
+	s.Require().NoError(err)
+	s.Equal(e1, got)
 }

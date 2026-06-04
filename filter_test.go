@@ -1,8 +1,9 @@
 package ember
 
 import (
-	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestConstructors(t *testing.T) {
@@ -39,9 +40,7 @@ func TestConstructors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if !reflect.DeepEqual(tt.got, tt.want) {
-				t.Errorf("got %#v, want %#v", tt.got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.got)
 		})
 	}
 }

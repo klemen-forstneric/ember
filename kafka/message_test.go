@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/klemen-forstneric/ember"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMessageJSONRoundTrip(t *testing.T) {
@@ -20,26 +22,16 @@ func TestMessageJSONRoundTrip(t *testing.T) {
 	}
 
 	raw, err := json.Marshal(&in)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	require.NoError(t, err)
 
 	var out message
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	require.NoError(t, json.Unmarshal(raw, &out))
 
-	if out.ID != in.ID || out.CorrelationID != in.CorrelationID ||
-		out.EntityID != in.EntityID || out.Type != in.Type {
-		t.Errorf("round-trip mismatch: got %+v", out)
-	}
-	if string(out.Data) != string(in.Data) {
-		t.Errorf("data mismatch: got %s", out.Data)
-	}
-	if !out.PublishedAt.Equal(in.PublishedAt) {
-		t.Errorf("PublishedAt mismatch: got %v, want %v", out.PublishedAt, in.PublishedAt)
-	}
-	if v := out.Metadata[MetadataKeyCorrelationID]; v != in.Metadata[MetadataKeyCorrelationID] {
-		t.Errorf("Metadata mismatch: got %v, want %v", v, in.Metadata[MetadataKeyCorrelationID])
-	}
+	assert.Equal(t, in.ID, out.ID)
+	assert.Equal(t, in.CorrelationID, out.CorrelationID)
+	assert.Equal(t, in.EntityID, out.EntityID)
+	assert.Equal(t, in.Type, out.Type)
+	assert.Equal(t, string(in.Data), string(out.Data))
+	assert.True(t, out.PublishedAt.Equal(in.PublishedAt), "PublishedAt mismatch")
+	assert.Equal(t, in.Metadata[MetadataKeyCorrelationID], out.Metadata[MetadataKeyCorrelationID])
 }

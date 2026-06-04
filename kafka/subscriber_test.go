@@ -9,6 +9,8 @@ import (
 
 	"github.com/klemen-forstneric/ember"
 	"github.com/segmentio/kafka-go"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/suite"
 )
 
 func kafkaMsgFor(t *testing.T, partition int, offset int64, eventType, entityID, correlationID string) kafka.Message {
@@ -27,86 +29,86 @@ func kafkaMsgFor(t *testing.T, partition int, offset int64, eventType, entityID,
 	return kafka.Message{Topic: "orders", Partition: partition, Offset: offset, Key: []byte(entityID), Value: payload}
 }
 
-func TestSubscribeForwardsStampsAndCommitsOnAck(t *testing.T) {
-	r := newFakeReader(5, true)
-	reg := &fakeConsumerRegistry{readers: map[string]reader{"projector": r}}
-	s := NewSubscriber(reg, ember.NopLogger)
+type SubscriberSuite struct {
+	suite.Suite
+	reg *mockConsumerRegistry
+	sub *Subscriber
+}
 
-	out, err := s.Subscribe(context.Background(), "projector")
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
+func TestSubscriberSuite(t *testing.T) {
+	suite.Run(t, new(SubscriberSuite))
+}
 
-	r.in <- kafkaMsgFor(t, 0, 7, "order.created", "e1", "corr-1")
+func (s *SubscriberSuite) SetupTest() {
+	s.reg = &mockConsumerRegistry{}
+	s.sub = NewSubscriber(s.reg, ember.NopLogger)
+}
+
+// start wires a channel-backed reader with the given delivery cap and backoff
+// into the registry, then subscribes. The reader's config getters and
+// commit/close are optional (.Maybe) so each test asserts only the behavior it
+// exercises — commits are verified through reader.committed().
+func (s *SubscriberSuite) start(maxDel int, capped bool, backoff time.Duration) (*mockReader, <-chan ember.AckableEventEnvelope) {
+	r := newMockReader()
+	r.On("MaxDeliveries").Return(maxDel, capped).Maybe()
+	r.On("RetryBackoff").Return(backoff).Maybe()
+	r.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Maybe()
+	r.On("Close").Return(nil).Maybe()
+	s.reg.On("Get", mock.Anything, "projector").Return(r, nil)
+	s.reg.On("Close").Return(nil).Maybe()
+
+	out, err := s.sub.Subscribe(context.Background(), "projector")
+	s.Require().NoError(err)
+	return r, out
+}
+
+func (s *SubscriberSuite) TestForwardsStampsAndCommitsOnAck() {
+	r, out := s.start(5, true, time.Millisecond)
+
+	r.in <- kafkaMsgFor(s.T(), 0, 7, "order.created", "e1", "corr-1")
 
 	select {
 	case env := <-out:
-		if env.EntityID != "e1" {
-			t.Errorf("entity id: got %q", env.EntityID)
-		}
-		if got := env.Metadata[MetadataKeyCurrentDelivery]; got != 1 {
-			t.Errorf("current delivery: got %v, want 1", got)
-		}
-		if got := env.Metadata[MetadataKeyMaxDeliveries]; got != 5 {
-			t.Errorf("max deliveries: got %v, want 5", got)
-		}
-		if got := env.Metadata[MetadataKeyCorrelationID]; got != "corr-1" {
-			t.Errorf("correlation id: got %v", got)
-		}
+		s.Equal("e1", env.EntityID)
+		s.Equal(1, env.Metadata[MetadataKeyCurrentDelivery])
+		s.Equal(5, env.Metadata[MetadataKeyMaxDeliveries])
+		s.Equal("corr-1", env.Metadata[MetadataKeyCorrelationID])
 		env.Ack()
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for an envelope")
+		s.FailNow("timed out waiting for an envelope")
 	}
 
-	s.Stop()
+	s.sub.Stop()
 
-	commits := r.commits()
-	if len(commits) != 1 || commits[0].Offset != 7 {
-		t.Errorf("expected a single commit at offset 7, got %+v", commits)
-	}
+	commits := r.committed()
+	s.Require().Len(commits, 1)
+	s.Equal(int64(7), commits[0].Offset)
 }
 
-func TestSubscribeOmitsMaxDeliveriesWhenUncapped(t *testing.T) {
-	r := newFakeReader(0, false)
-	reg := &fakeConsumerRegistry{readers: map[string]reader{"projector": r}}
-	s := NewSubscriber(reg, ember.NopLogger)
+func (s *SubscriberSuite) TestOmitsMaxDeliveriesWhenUncapped() {
+	r, out := s.start(0, false, time.Millisecond)
 
-	out, err := s.Subscribe(context.Background(), "projector")
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-
-	r.in <- kafkaMsgFor(t, 0, 0, "order.created", "e1", "corr-1")
+	r.in <- kafkaMsgFor(s.T(), 0, 0, "order.created", "e1", "corr-1")
 
 	select {
 	case env := <-out:
-		if got := env.Metadata[MetadataKeyCurrentDelivery]; got != 1 {
-			t.Errorf("current delivery: got %v, want 1", got)
-		}
-		if _, ok := env.Metadata[MetadataKeyMaxDeliveries]; ok {
-			t.Error("max_deliveries should be absent when there is no cap")
-		}
+		s.Equal(1, env.Metadata[MetadataKeyCurrentDelivery])
+		s.NotContains(env.Metadata, MetadataKeyMaxDeliveries)
 		env.Ack()
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for an envelope")
+		s.FailNow("timed out waiting for an envelope")
 	}
-	s.Stop()
+
+	s.sub.Stop()
 }
 
-func TestSubscribeCommitsContiguouslyUnderOutOfOrderAcks(t *testing.T) {
-	r := newFakeReader(5, true)
-	reg := &fakeConsumerRegistry{readers: map[string]reader{"projector": r}}
-	s := NewSubscriber(reg, ember.NopLogger)
-
-	out, err := s.Subscribe(context.Background(), "projector")
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
+func (s *SubscriberSuite) TestCommitsContiguouslyUnderOutOfOrderAcks() {
+	r, out := s.start(5, true, time.Millisecond)
 
 	// Three messages on one partition, offsets 1,2,3.
-	r.in <- kafkaMsgFor(t, 0, 1, "order.created", "e1", "c")
-	r.in <- kafkaMsgFor(t, 0, 2, "order.created", "e2", "c")
-	r.in <- kafkaMsgFor(t, 0, 3, "order.created", "e3", "c")
+	r.in <- kafkaMsgFor(s.T(), 0, 1, "order.created", "e1", "c")
+	r.in <- kafkaMsgFor(s.T(), 0, 2, "order.created", "e2", "c")
+	r.in <- kafkaMsgFor(s.T(), 0, 3, "order.created", "e3", "c")
 
 	// Receive all three before acking, keyed by entity id.
 	envs := map[string]ember.AckableEventEnvelope{}
@@ -115,229 +117,173 @@ func TestSubscribeCommitsContiguouslyUnderOutOfOrderAcks(t *testing.T) {
 		case env := <-out:
 			envs[env.EntityID] = env
 		case <-time.After(time.Second):
-			t.Fatal("timed out waiting for envelopes")
+			s.FailNow("timed out waiting for envelopes")
 		}
 	}
 
 	// Ack out of order: e3 (offset 3) first commits nothing; then e1, then e2.
 	envs["e3"].Ack()
-	if c := r.commits(); len(c) != 0 {
-		t.Fatalf("expected no commit after acking offset 3 alone, got %+v", c)
-	}
+	s.Empty(r.committed(), "no commit expected after acking offset 3 alone")
+
 	envs["e1"].Ack()
 	envs["e2"].Ack()
 
-	s.Stop()
+	s.sub.Stop()
 
-	commits := r.commits()
-	if len(commits) != 2 || commits[0].Offset != 1 || commits[1].Offset != 3 {
-		t.Errorf("expected commits [1, 3], got %+v", commits)
-	}
+	commits := r.committed()
+	s.Require().Len(commits, 2)
+	s.Equal(int64(1), commits[0].Offset)
+	s.Equal(int64(3), commits[1].Offset)
 }
 
-func TestSubscribeRetriesNackedMessageThenCommits(t *testing.T) {
-	r := newFakeReader(3, true)
-	reg := &fakeConsumerRegistry{readers: map[string]reader{"projector": r}}
-	s := NewSubscriber(reg, ember.NopLogger)
+func (s *SubscriberSuite) TestRetriesNackedMessageThenCommits() {
+	r, out := s.start(3, true, time.Millisecond)
 
-	out, err := s.Subscribe(context.Background(), "projector")
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-
-	r.in <- kafkaMsgFor(t, 0, 4, "order.created", "e1", "c")
+	r.in <- kafkaMsgFor(s.T(), 0, 4, "order.created", "e1", "c")
 
 	// First delivery: attempt 1, nack it.
 	select {
 	case env := <-out:
-		if got := env.Metadata[MetadataKeyCurrentDelivery]; got != 1 {
-			t.Errorf("first delivery current_delivery: got %v, want 1", got)
-		}
+		s.Equal(1, env.Metadata[MetadataKeyCurrentDelivery])
 		env.Nack()
 	case <-time.After(time.Second):
-		t.Fatal("timed out on first delivery")
+		s.FailNow("timed out on first delivery")
 	}
 
 	// Redelivery: attempt 2, ack it.
 	select {
 	case env := <-out:
-		if got := env.Metadata[MetadataKeyCurrentDelivery]; got != 2 {
-			t.Errorf("redelivery current_delivery: got %v, want 2", got)
-		}
+		s.Equal(2, env.Metadata[MetadataKeyCurrentDelivery])
 		env.Ack()
 	case <-time.After(time.Second):
-		t.Fatal("timed out on redelivery")
+		s.FailNow("timed out on redelivery")
 	}
 
-	s.Stop()
+	s.sub.Stop()
 
-	commits := r.commits()
-	if len(commits) != 1 || commits[0].Offset != 4 {
-		t.Errorf("expected a single commit at offset 4, got %+v", commits)
-	}
+	commits := r.committed()
+	s.Require().Len(commits, 1)
+	s.Equal(int64(4), commits[0].Offset)
 }
 
-func TestSubscribeDropsAndCommitsWhenCapReached(t *testing.T) {
-	r := newFakeReader(2, true) // cap of 2 deliveries
-	reg := &fakeConsumerRegistry{readers: map[string]reader{"projector": r}}
-	s := NewSubscriber(reg, ember.NopLogger)
+func (s *SubscriberSuite) TestDropsAndCommitsWhenCapReached() {
+	r, out := s.start(2, true, time.Millisecond) // cap of 2 deliveries
 
-	out, err := s.Subscribe(context.Background(), "projector")
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-
-	r.in <- kafkaMsgFor(t, 0, 9, "order.created", "e1", "c")
+	r.in <- kafkaMsgFor(s.T(), 0, 9, "order.created", "e1", "c")
 
 	// Attempt 1 -> nack -> retried.
 	(<-out).Nack()
 	// Attempt 2 -> nack -> cap reached -> dropped + committed.
 	select {
 	case env := <-out:
-		if got := env.Metadata[MetadataKeyCurrentDelivery]; got != 2 {
-			t.Errorf("second delivery current_delivery: got %v, want 2", got)
-		}
+		s.Equal(2, env.Metadata[MetadataKeyCurrentDelivery])
 		env.Nack()
 	case <-time.After(time.Second):
-		t.Fatal("timed out on second delivery")
+		s.FailNow("timed out on second delivery")
 	}
 
 	// No third delivery should arrive.
 	select {
 	case env := <-out:
-		t.Fatalf("did not expect a third delivery, got entity %q", env.EntityID)
+		s.FailNowf("unexpected third delivery", "got entity %q", env.EntityID)
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	s.Stop()
+	s.sub.Stop()
 
-	commits := r.commits()
-	if len(commits) != 1 || commits[0].Offset != 9 {
-		t.Errorf("expected a drop-commit at offset 9, got %+v", commits)
-	}
+	commits := r.committed()
+	s.Require().Len(commits, 1)
+	s.Equal(int64(9), commits[0].Offset)
 }
 
-func TestSubscribeDropsAndCommitsMalformedPayload(t *testing.T) {
-	r := newFakeReader(5, true)
-	reg := &fakeConsumerRegistry{readers: map[string]reader{"projector": r}}
-	s := NewSubscriber(reg, ember.NopLogger)
-
-	out, err := s.Subscribe(context.Background(), "projector")
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
+func (s *SubscriberSuite) TestDropsAndCommitsMalformedPayload() {
+	r, out := s.start(5, true, time.Millisecond)
 
 	r.in <- kafka.Message{Topic: "orders", Partition: 0, Offset: 11, Value: []byte("not json")}
 
 	// Nothing is delivered to the handler.
 	select {
 	case env := <-out:
-		t.Fatalf("did not expect a delivery for a malformed payload, got %q", env.EntityID)
+		s.FailNowf("unexpected delivery for malformed payload", "got entity %q", env.EntityID)
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	s.Stop()
+	s.sub.Stop()
 
-	commits := r.commits()
-	if len(commits) != 1 || commits[0].Offset != 11 {
-		t.Errorf("expected a drop-commit at offset 11, got %+v", commits)
-	}
+	commits := r.committed()
+	s.Require().Len(commits, 1)
+	s.Equal(int64(11), commits[0].Offset)
 }
 
-func TestSubscribeUnknownSubscriptionErrors(t *testing.T) {
-	reg := &fakeConsumerRegistry{readers: map[string]reader{}}
-	s := NewSubscriber(reg, ember.NopLogger)
-	if _, err := s.Subscribe(context.Background(), "nope"); err == nil {
-		t.Fatal("expected error for unknown subscription")
-	}
+func (s *SubscriberSuite) TestUnknownSubscriptionErrors() {
+	s.reg.On("Get", mock.Anything, "nope").Return(nil, errors.New("unknown subscription"))
+
+	_, err := s.sub.Subscribe(context.Background(), "nope")
+	s.Error(err)
 }
 
-func TestSubscribeGetErrorPropagates(t *testing.T) {
-	reg := &fakeConsumerRegistry{getErr: errors.New("boom")}
-	s := NewSubscriber(reg, ember.NopLogger)
-	if _, err := s.Subscribe(context.Background(), "projector"); err == nil {
-		t.Fatal("expected the registry Get error to propagate")
-	}
+func (s *SubscriberSuite) TestGetErrorPropagates() {
+	s.reg.On("Get", mock.Anything, "projector").Return(nil, errors.New("boom"))
+
+	_, err := s.sub.Subscribe(context.Background(), "projector")
+	s.Error(err)
 }
 
-func TestStopClosesRegistry(t *testing.T) {
-	r := newFakeReader(1, true)
-	reg := &fakeConsumerRegistry{readers: map[string]reader{"projector": r}}
-	s := NewSubscriber(reg, ember.NopLogger)
-	if _, err := s.Subscribe(context.Background(), "projector"); err != nil {
-		t.Fatal(err)
-	}
-	s.Stop()
-	if reg.closeCalls != 1 {
-		t.Errorf("expected registry Close called once, got %d", reg.closeCalls)
-	}
+func (s *SubscriberSuite) TestStopClosesRegistry() {
+	s.start(1, true, time.Millisecond)
+
+	s.sub.Stop()
+
+	s.reg.AssertNumberOfCalls(s.T(), "Close", 1)
 }
 
-func TestSubscribeNackAfterStopIsSafeNoop(t *testing.T) {
-	r := newFakeReader(3, true)
-	reg := &fakeConsumerRegistry{readers: map[string]reader{"projector": r}}
-	s := NewSubscriber(reg, ember.NopLogger)
+func (s *SubscriberSuite) TestNackAfterStopIsSafeNoop() {
+	r, out := s.start(3, true, time.Millisecond)
 
-	out, err := s.Subscribe(context.Background(), "projector")
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-
-	r.in <- kafkaMsgFor(t, 0, 1, "order.created", "e1", "c")
+	r.in <- kafkaMsgFor(s.T(), 0, 1, "order.created", "e1", "c")
 
 	var env ember.AckableEventEnvelope
 	select {
 	case env = <-out:
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for an envelope")
+		s.FailNow("timed out waiting for an envelope")
 	}
 
-	s.Stop()
+	s.sub.Stop()
 
-	// A downstream handler may still nack after the transport has stopped
-	// (ember stops the transport before the consumer). This must not panic and
-	// must not schedule a redelivery: the retry loop has already exited, so the
-	// enqueued message is simply never re-delivered (its offset stays
-	// uncommitted and Kafka redelivers it later).
+	// A downstream handler may still nack after the transport has stopped (ember
+	// stops the transport before the consumer). This must not panic and must not
+	// schedule a redelivery: the retry loop has already exited, so the enqueued
+	// message is simply never re-delivered.
 	env.Nack()
 
 	select {
 	case <-out:
-		t.Fatal("did not expect a redelivery after Stop")
+		s.FailNow("did not expect a redelivery after Stop")
 	case <-time.After(20 * time.Millisecond):
 	}
 }
 
-func TestSubscribeRetriesMultipleNackedMessages(t *testing.T) {
-	r := newFakeReader(5, true)
-	// A backoff well above the time to read three channel messages guarantees
-	// the three initial deliveries (current_delivery 1) are all received before
-	// any redelivery (current_delivery 2) is re-emitted, making the assertions
-	// below order-independent of the retry loop.
-	r.backoff = 50 * time.Millisecond
-	reg := &fakeConsumerRegistry{readers: map[string]reader{"projector": r}}
-	s := NewSubscriber(reg, ember.NopLogger)
-
-	out, err := s.Subscribe(context.Background(), "projector")
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
+func (s *SubscriberSuite) TestRetriesMultipleNackedMessages() {
+	// A backoff well above the time to read three channel messages guarantees the
+	// three initial deliveries (current_delivery 1) are all received before any
+	// redelivery (current_delivery 2) is re-emitted, making the assertions below
+	// order-independent of the retry loop.
+	r, out := s.start(5, true, 50*time.Millisecond)
 
 	// Three messages on one partition. Each is delivered, nacked once, then
 	// re-delivered by the single retry loop (no goroutine per message).
-	r.in <- kafkaMsgFor(t, 0, 1, "order.created", "e1", "c")
-	r.in <- kafkaMsgFor(t, 0, 2, "order.created", "e2", "c")
-	r.in <- kafkaMsgFor(t, 0, 3, "order.created", "e3", "c")
+	r.in <- kafkaMsgFor(s.T(), 0, 1, "order.created", "e1", "c")
+	r.in <- kafkaMsgFor(s.T(), 0, 2, "order.created", "e2", "c")
+	r.in <- kafkaMsgFor(s.T(), 0, 3, "order.created", "e3", "c")
 
 	for i := 0; i < 3; i++ {
 		select {
 		case env := <-out:
-			if got := env.Metadata[MetadataKeyCurrentDelivery]; got != 1 {
-				t.Errorf("first delivery current_delivery: got %v, want 1", got)
-			}
+			s.Equal(1, env.Metadata[MetadataKeyCurrentDelivery])
 			env.Nack()
 		case <-time.After(time.Second):
-			t.Fatal("timed out on first deliveries")
+			s.FailNow("timed out on first deliveries")
 		}
 	}
 
@@ -345,19 +291,16 @@ func TestSubscribeRetriesMultipleNackedMessages(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		select {
 		case env := <-out:
-			if got := env.Metadata[MetadataKeyCurrentDelivery]; got != 2 {
-				t.Errorf("redelivery current_delivery: got %v, want 2", got)
-			}
+			s.Equal(2, env.Metadata[MetadataKeyCurrentDelivery])
 			env.Ack()
 		case <-time.After(time.Second):
-			t.Fatal("timed out on redeliveries")
+			s.FailNow("timed out on redeliveries")
 		}
 	}
 
-	s.Stop()
+	s.sub.Stop()
 
-	commits := r.commits()
-	if len(commits) != 3 || commits[2].Offset != 3 {
-		t.Errorf("expected three contiguous commits ending at offset 3, got %+v", commits)
-	}
+	commits := r.committed()
+	s.Require().Len(commits, 3)
+	s.Equal(int64(3), commits[2].Offset)
 }

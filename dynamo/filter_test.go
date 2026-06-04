@@ -1,14 +1,14 @@
 package dynamo
 
 import (
-	"errors"
-	"reflect"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/klemen-forstneric/ember"
 )
@@ -18,16 +18,10 @@ import (
 func build(t *testing.T, f ember.Filter) (string, map[string]string, map[string]types.AttributeValue) {
 	t.Helper()
 	cb, ok, err := buildFilter(f)
-	if err != nil {
-		t.Fatalf("buildFilter: %v", err)
-	}
-	if !ok {
-		t.Fatalf("buildFilter: expected a filter, got none")
-	}
+	require.NoError(t, err, "buildFilter")
+	require.True(t, ok, "buildFilter: expected a filter, got none")
 	expr, err := expression.NewBuilder().WithFilter(cb).Build()
-	if err != nil {
-		t.Fatalf("build expression: %v", err)
-	}
+	require.NoError(t, err, "build expression")
 	return aws.ToString(expr.Filter()), expr.Names(), expr.Values()
 }
 
@@ -36,12 +30,8 @@ func sS(s string) types.AttributeValue { return &types.AttributeValueMemberS{Val
 
 func TestBuildFilterNilMatchesAll(t *testing.T) {
 	cb, ok, err := buildFilter(nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ok {
-		t.Errorf("nil filter should report no filter, got %#v", cb)
-	}
+	require.NoError(t, err)
+	assert.False(t, ok, "nil filter should report no filter, got %#v", cb)
 }
 
 func TestBuildFilterComparison(t *testing.T) {
@@ -105,208 +95,130 @@ func TestBuildFilterComparison(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			gotExpr, gotNames, gotVals := build(t, tt.filter)
-			if gotExpr != tt.wantExpr {
-				t.Errorf("expr: got %q, want %q", gotExpr, tt.wantExpr)
-			}
-			if !reflect.DeepEqual(gotNames, tt.wantNames) {
-				t.Errorf("names: got %#v, want %#v", gotNames, tt.wantNames)
-			}
-			if !reflect.DeepEqual(gotVals, tt.wantVals) {
-				t.Errorf("values: got %#v, want %#v", gotVals, tt.wantVals)
-			}
+			assert.Equal(t, tt.wantExpr, gotExpr, "expr")
+			assert.Equal(t, tt.wantNames, gotNames, "names")
+			assert.Equal(t, tt.wantVals, gotVals, "values")
 		})
 	}
 }
 
 func TestBuildFilterMembership(t *testing.T) {
 	gotExpr, gotNames, gotVals := build(t, ember.In("region", "EU", "UK"))
-	if gotExpr != "#0.#1 IN (:0, :1)" {
-		t.Errorf("expr: got %q", gotExpr)
-	}
-	if !reflect.DeepEqual(gotNames, map[string]string{"#0": "data", "#1": "region"}) {
-		t.Errorf("names: got %#v", gotNames)
-	}
-	if !reflect.DeepEqual(gotVals, map[string]types.AttributeValue{":0": sS("EU"), ":1": sS("UK")}) {
-		t.Errorf("values: got %#v", gotVals)
-	}
+	assert.Equal(t, "#0.#1 IN (:0, :1)", gotExpr)
+	assert.Equal(t, map[string]string{"#0": "data", "#1": "region"}, gotNames)
+	assert.Equal(t, map[string]types.AttributeValue{":0": sS("EU"), ":1": sS("UK")}, gotVals)
 }
 
 func TestBuildFilterEmptyMembershipMatchesNone(t *testing.T) {
 	// Empty IN is always-false: attribute_not_exists(version).
 	gotExpr, gotNames, _ := build(t, ember.In("region"))
-	if gotExpr != "attribute_not_exists (#0)" {
-		t.Errorf("expr: got %q", gotExpr)
-	}
-	if !reflect.DeepEqual(gotNames, map[string]string{"#0": "version"}) {
-		t.Errorf("names: got %#v", gotNames)
-	}
+	assert.Equal(t, "attribute_not_exists (#0)", gotExpr)
+	assert.Equal(t, map[string]string{"#0": "version"}, gotNames)
 }
 
 func TestBuildFilterNeGuarded(t *testing.T) {
 	// Ne on a data path is the two-valued complement: present, non-null, and !=.
 	gotExpr, gotNames, gotVals := build(t, ember.Ne("status", "open"))
-	want := "(attribute_exists (#0.#1)) AND (NOT (attribute_type (#0.#1, :0))) AND (#0.#1 <> :1)"
-	if gotExpr != want {
-		t.Errorf("expr: got %q, want %q", gotExpr, want)
-	}
-	if !reflect.DeepEqual(gotNames, map[string]string{"#0": "data", "#1": "status"}) {
-		t.Errorf("names: got %#v", gotNames)
-	}
-	if !reflect.DeepEqual(gotVals, map[string]types.AttributeValue{":0": sS("NULL"), ":1": sS("open")}) {
-		t.Errorf("values: got %#v", gotVals)
-	}
+	assert.Equal(t, "(attribute_exists (#0.#1)) AND (NOT (attribute_type (#0.#1, :0))) AND (#0.#1 <> :1)", gotExpr)
+	assert.Equal(t, map[string]string{"#0": "data", "#1": "status"}, gotNames)
+	assert.Equal(t, map[string]types.AttributeValue{":0": sS("NULL"), ":1": sS("open")}, gotVals)
 }
 
 func TestBuildFilterNeReservedVersionUnguarded(t *testing.T) {
 	gotExpr, gotNames, gotVals := build(t, ember.Ne("version", 3))
-	if gotExpr != "#0 <> :0" {
-		t.Errorf("expr: got %q", gotExpr)
-	}
-	if !reflect.DeepEqual(gotNames, map[string]string{"#0": "version"}) {
-		t.Errorf("names: got %#v", gotNames)
-	}
-	if !reflect.DeepEqual(gotVals, map[string]types.AttributeValue{":0": nN("3")}) {
-		t.Errorf("values: got %#v", gotVals)
-	}
+	assert.Equal(t, "#0 <> :0", gotExpr)
+	assert.Equal(t, map[string]string{"#0": "version"}, gotNames)
+	assert.Equal(t, map[string]types.AttributeValue{":0": nN("3")}, gotVals)
 }
 
 func TestBuildFilterExistence(t *testing.T) {
 	t.Run("true on data path", func(t *testing.T) {
 		gotExpr, gotNames, gotVals := build(t, ember.Exists("status", true))
-		want := "(attribute_exists (#0.#1)) AND (NOT (attribute_type (#0.#1, :0)))"
-		if gotExpr != want {
-			t.Errorf("expr: got %q, want %q", gotExpr, want)
-		}
-		if !reflect.DeepEqual(gotNames, map[string]string{"#0": "data", "#1": "status"}) {
-			t.Errorf("names: got %#v", gotNames)
-		}
-		if !reflect.DeepEqual(gotVals, map[string]types.AttributeValue{":0": sS("NULL")}) {
-			t.Errorf("values: got %#v", gotVals)
-		}
+		assert.Equal(t, "(attribute_exists (#0.#1)) AND (NOT (attribute_type (#0.#1, :0)))", gotExpr)
+		assert.Equal(t, map[string]string{"#0": "data", "#1": "status"}, gotNames)
+		assert.Equal(t, map[string]types.AttributeValue{":0": sS("NULL")}, gotVals)
 	})
 	t.Run("false on data path", func(t *testing.T) {
 		gotExpr, _, gotVals := build(t, ember.Exists("status", false))
-		want := "(attribute_not_exists (#0.#1)) OR (attribute_type (#0.#1, :0))"
-		if gotExpr != want {
-			t.Errorf("expr: got %q, want %q", gotExpr, want)
-		}
-		if !reflect.DeepEqual(gotVals, map[string]types.AttributeValue{":0": sS("NULL")}) {
-			t.Errorf("values: got %#v", gotVals)
-		}
+		assert.Equal(t, "(attribute_not_exists (#0.#1)) OR (attribute_type (#0.#1, :0))", gotExpr)
+		assert.Equal(t, map[string]types.AttributeValue{":0": sS("NULL")}, gotVals)
 	})
 }
 
 func TestBuildFilterBoolean(t *testing.T) {
 	t.Run("and", func(t *testing.T) {
 		gotExpr, _, _ := build(t, ember.And(ember.Eq("a", "1"), ember.Eq("b", "2")))
-		if gotExpr != "(#0.#1 = :0) AND (#0.#2 = :1)" {
-			t.Errorf("expr: got %q", gotExpr)
-		}
+		assert.Equal(t, "(#0.#1 = :0) AND (#0.#2 = :1)", gotExpr)
 	})
 	t.Run("or", func(t *testing.T) {
 		gotExpr, _, _ := build(t, ember.Or(ember.Eq("a", "1"), ember.Eq("b", "2")))
-		if gotExpr != "(#0.#1 = :0) OR (#0.#2 = :1)" {
-			t.Errorf("expr: got %q", gotExpr)
-		}
+		assert.Equal(t, "(#0.#1 = :0) OR (#0.#2 = :1)", gotExpr)
 	})
 	t.Run("not", func(t *testing.T) {
 		gotExpr, _, _ := build(t, ember.Not(ember.Eq("status", "open")))
-		if gotExpr != "NOT (#0.#1 = :0)" {
-			t.Errorf("expr: got %q", gotExpr)
-		}
+		assert.Equal(t, "NOT (#0.#1 = :0)", gotExpr)
 	})
 	t.Run("single-child and collapses", func(t *testing.T) {
 		gotExpr, _, _ := build(t, ember.And(ember.Eq("a", "1")))
-		if gotExpr != "#0.#1 = :0" {
-			t.Errorf("expr: got %q", gotExpr)
-		}
+		assert.Equal(t, "#0.#1 = :0", gotExpr)
 	})
 	t.Run("empty and matches all", func(t *testing.T) {
 		gotExpr, gotNames, _ := build(t, ember.And())
-		if gotExpr != "attribute_exists (#0)" || !reflect.DeepEqual(gotNames, map[string]string{"#0": "version"}) {
-			t.Errorf("expr: got %q names %#v", gotExpr, gotNames)
-		}
+		assert.Equal(t, "attribute_exists (#0)", gotExpr)
+		assert.Equal(t, map[string]string{"#0": "version"}, gotNames)
 	})
 	t.Run("empty or matches none", func(t *testing.T) {
 		gotExpr, gotNames, _ := build(t, ember.Or())
-		if gotExpr != "attribute_not_exists (#0)" || !reflect.DeepEqual(gotNames, map[string]string{"#0": "version"}) {
-			t.Errorf("expr: got %q names %#v", gotExpr, gotNames)
-		}
+		assert.Equal(t, "attribute_not_exists (#0)", gotExpr)
+		assert.Equal(t, map[string]string{"#0": "version"}, gotNames)
 	})
 }
 
 func TestBuildFilterUnsupportedValue(t *testing.T) {
 	_, _, err := buildFilter(ember.Eq("status", []string{"nope"}))
-	if !errors.Is(err, ember.ErrUnsupportedFilter) {
-		t.Errorf("got %v, want ErrUnsupportedFilter", err)
-	}
+	assert.ErrorIs(t, err, ember.ErrUnsupportedFilter)
 }
 
 func TestBuildFilterRejectsKeyAttribute(t *testing.T) {
 	for _, path := range []string{"id", "type"} {
 		_, _, err := buildFilter(ember.Eq(path, "x"))
-		if !errors.Is(err, ember.ErrUnsupportedFilter) {
-			t.Errorf("path %q: got %v, want ErrUnsupportedFilter", path, err)
-		}
+		assert.ErrorIs(t, err, ember.ErrUnsupportedFilter, "path %q", path)
 	}
 }
 
 func TestBuildFilterMembershipReservedVersion(t *testing.T) {
 	// In on the reserved version attribute: no data. prefix, no guard.
 	gotExpr, gotNames, gotVals := build(t, ember.In("version", 1, 2))
-	if gotExpr != "#0 IN (:0, :1)" {
-		t.Errorf("expr: got %q", gotExpr)
-	}
-	if !reflect.DeepEqual(gotNames, map[string]string{"#0": "version"}) {
-		t.Errorf("names: got %#v", gotNames)
-	}
-	if !reflect.DeepEqual(gotVals, map[string]types.AttributeValue{":0": nN("1"), ":1": nN("2")}) {
-		t.Errorf("values: got %#v", gotVals)
-	}
+	assert.Equal(t, "#0 IN (:0, :1)", gotExpr)
+	assert.Equal(t, map[string]string{"#0": "version"}, gotNames)
+	assert.Equal(t, map[string]types.AttributeValue{":0": nN("1"), ":1": nN("2")}, gotVals)
 }
 
 func TestBuildFilterExistenceReservedVersion(t *testing.T) {
 	// version is always present and non-null, so existence is unguarded.
 	t.Run("true", func(t *testing.T) {
 		gotExpr, gotNames, _ := build(t, ember.Exists("version", true))
-		if gotExpr != "attribute_exists (#0)" {
-			t.Errorf("expr: got %q", gotExpr)
-		}
-		if !reflect.DeepEqual(gotNames, map[string]string{"#0": "version"}) {
-			t.Errorf("names: got %#v", gotNames)
-		}
+		assert.Equal(t, "attribute_exists (#0)", gotExpr)
+		assert.Equal(t, map[string]string{"#0": "version"}, gotNames)
 	})
 	t.Run("false", func(t *testing.T) {
 		gotExpr, gotNames, _ := build(t, ember.Exists("version", false))
-		if gotExpr != "attribute_not_exists (#0)" {
-			t.Errorf("expr: got %q", gotExpr)
-		}
-		if !reflect.DeepEqual(gotNames, map[string]string{"#0": "version"}) {
-			t.Errorf("names: got %#v", gotNames)
-		}
+		assert.Equal(t, "attribute_not_exists (#0)", gotExpr)
+		assert.Equal(t, map[string]string{"#0": "version"}, gotNames)
 	})
 }
 
 func TestBuildFilterSingleChildOrCollapses(t *testing.T) {
 	gotExpr, _, _ := build(t, ember.Or(ember.Eq("a", "1")))
-	if gotExpr != "#0.#1 = :0" {
-		t.Errorf("expr: got %q", gotExpr)
-	}
+	assert.Equal(t, "#0.#1 = :0", gotExpr)
 }
 
 func TestBuildFilterNotOfNe(t *testing.T) {
 	// Not of the compound Ne; delegates to expression.Not over the guarded AND.
 	gotExpr, gotNames, gotVals := build(t, ember.Not(ember.Ne("status", "open")))
-	want := "NOT ((attribute_exists (#0.#1)) AND (NOT (attribute_type (#0.#1, :0))) AND (#0.#1 <> :1))"
-	if gotExpr != want {
-		t.Errorf("expr: got %q, want %q", gotExpr, want)
-	}
-	if !reflect.DeepEqual(gotNames, map[string]string{"#0": "data", "#1": "status"}) {
-		t.Errorf("names: got %#v", gotNames)
-	}
-	if !reflect.DeepEqual(gotVals, map[string]types.AttributeValue{":0": sS("NULL"), ":1": sS("open")}) {
-		t.Errorf("values: got %#v", gotVals)
-	}
+	assert.Equal(t, "NOT ((attribute_exists (#0.#1)) AND (NOT (attribute_type (#0.#1, :0))) AND (#0.#1 <> :1))", gotExpr)
+	assert.Equal(t, map[string]string{"#0": "data", "#1": "status"}, gotNames)
+	assert.Equal(t, map[string]types.AttributeValue{":0": sS("NULL"), ":1": sS("open")}, gotVals)
 }
 
 // Compile-time assertion that the repository satisfies the interface.

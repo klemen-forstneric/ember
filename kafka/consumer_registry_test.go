@@ -4,33 +4,32 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestKafkaReaderExposesCapAndBackoff(t *testing.T) {
 	r := kafkaReader{maxDeliveries: 3, capped: true, backoff: 2 * time.Second}
 
-	if limit, capped := r.MaxDeliveries(); limit != 3 || !capped {
-		t.Errorf("MaxDeliveries: got (%d, %v), want (3, true)", limit, capped)
-	}
-	if r.RetryBackoff() != 2*time.Second {
-		t.Errorf("RetryBackoff: got %v, want 2s", r.RetryBackoff())
-	}
+	limit, capped := r.MaxDeliveries()
+	assert.Equal(t, 3, limit)
+	assert.True(t, capped)
+	assert.Equal(t, 2*time.Second, r.RetryBackoff())
 }
 
 func TestConsumerRegistryUnknownSubscriptionErrors(t *testing.T) {
 	reg := NewConsumerRegistry([]string{"localhost:9092"}, map[string]SubscriptionConfig{})
-	if _, err := reg.Get(context.Background(), "nope"); err == nil {
-		t.Fatal("expected an error for an unknown subscription")
-	}
+	_, err := reg.Get(context.Background(), "nope")
+	assert.Error(t, err)
 }
 
 func TestConsumerRegistryEmptyTopicsErrors(t *testing.T) {
 	reg := NewConsumerRegistry([]string{"localhost:9092"}, map[string]SubscriptionConfig{
 		"projector": {}, // no topics configured
 	})
-	if _, err := reg.Get(context.Background(), "projector"); err == nil {
-		t.Fatal("expected an error when a subscription configures no topics")
-	}
+	_, err := reg.Get(context.Background(), "projector")
+	assert.Error(t, err)
 }
 
 func TestConsumerRegistryGetReturnsConfiguredReader(t *testing.T) {
@@ -39,17 +38,13 @@ func TestConsumerRegistryGetReturnsConfiguredReader(t *testing.T) {
 	})
 
 	r, err := reg.Get(context.Background(), "projector")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = reg.Close() })
 
-	if limit, capped := r.MaxDeliveries(); limit != 5 || !capped {
-		t.Errorf("MaxDeliveries: got (%d, %v), want (5, true)", limit, capped)
-	}
-	if r.RetryBackoff() != defaultRetryBackoff {
-		t.Errorf("RetryBackoff: got %v, want default %v", r.RetryBackoff(), defaultRetryBackoff)
-	}
+	limit, capped := r.MaxDeliveries()
+	assert.Equal(t, 5, limit)
+	assert.True(t, capped)
+	assert.Equal(t, defaultRetryBackoff, r.RetryBackoff())
 }
 
 func TestConsumerRegistryUncappedWhenNoMaxDeliveries(t *testing.T) {
@@ -57,12 +52,9 @@ func TestConsumerRegistryUncappedWhenNoMaxDeliveries(t *testing.T) {
 		"projector": {Topics: []string{"orders"}},
 	})
 	r, err := reg.Get(context.Background(), "projector")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = reg.Close() })
 
-	if _, capped := r.MaxDeliveries(); capped {
-		t.Error("expected uncapped (capped=false) when MaxDeliveries is zero")
-	}
+	_, capped := r.MaxDeliveries()
+	assert.False(t, capped, "expected uncapped when MaxDeliveries is zero")
 }

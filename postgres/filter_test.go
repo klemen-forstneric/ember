@@ -1,12 +1,12 @@
 package postgres
 
 import (
-	"errors"
-	"reflect"
 	"testing"
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/klemen-forstneric/ember"
 )
@@ -54,38 +54,24 @@ func TestBuildPredicate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pred, err := buildPredicate(tt.filter)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			require.NoError(t, err)
 			gotSQL, gotArgs, err := pred.ToSql()
-			if err != nil {
-				t.Fatalf("ToSql error: %v", err)
-			}
-			if gotSQL != tt.wantSQL {
-				t.Errorf("sql = %q, want %q", gotSQL, tt.wantSQL)
-			}
-			if !reflect.DeepEqual(gotArgs, tt.wantArgs) {
-				t.Errorf("args = %#v, want %#v", gotArgs, tt.wantArgs)
-			}
+			require.NoError(t, err, "ToSql")
+			assert.Equal(t, tt.wantSQL, gotSQL, "sql")
+			assert.Equal(t, tt.wantArgs, gotArgs, "args")
 		})
 	}
 }
 
 func TestBuildPredicateNilMatchesAll(t *testing.T) {
 	pred, err := buildPredicate(nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if pred != nil {
-		t.Errorf("nil filter should yield nil predicate, got %#v", pred)
-	}
+	require.NoError(t, err)
+	assert.Nil(t, pred, "nil filter should yield nil predicate")
 }
 
 func TestBuildPredicateUnsupportedValue(t *testing.T) {
 	_, err := buildPredicate(ember.Eq("status", []string{"nope"}))
-	if !errors.Is(err, ember.ErrUnsupportedFilter) {
-		t.Errorf("got %v, want ErrUnsupportedFilter", err)
-	}
+	assert.ErrorIs(t, err, ember.ErrUnsupportedFilter)
 }
 
 // TestListQueryPlaceholders pins the List seam: the type scope and the filter
@@ -93,9 +79,7 @@ func TestBuildPredicateUnsupportedValue(t *testing.T) {
 // across both (type first, then the filter args in order).
 func TestListQueryPlaceholders(t *testing.T) {
 	pred, err := buildPredicate(ember.And(ember.Eq("status", "open"), ember.Gt("total", 100)))
-	if err != nil {
-		t.Fatalf("buildPredicate error: %v", err)
-	}
+	require.NoError(t, err, "buildPredicate")
 
 	gotSQL, gotArgs, err := psql.
 		Select("id", "version", "data").
@@ -103,19 +87,13 @@ func TestListQueryPlaceholders(t *testing.T) {
 		Where(sq.Eq{"type": "order"}).
 		Where(pred).
 		ToSql()
-	if err != nil {
-		t.Fatalf("ToSql error: %v", err)
-	}
+	require.NoError(t, err, "ToSql")
 
 	wantSQL := "SELECT id, version, data FROM entities WHERE type = $1 AND " +
 		"((data#>>'{status}' IS NOT NULL AND data#>>'{status}' = $2) AND " +
 		"(data#>>'{total}' IS NOT NULL AND (data#>>'{total}')::numeric > $3))"
-	if gotSQL != wantSQL {
-		t.Errorf("sql = %q, want %q", gotSQL, wantSQL)
-	}
-	if !reflect.DeepEqual(gotArgs, []any{"order", "open", 100}) {
-		t.Errorf("args = %#v, want %#v", gotArgs, []any{"order", "open", 100})
-	}
+	assert.Equal(t, wantSQL, gotSQL, "sql")
+	assert.Equal(t, []any{"order", "open", 100}, gotArgs, "args")
 }
 
 // Compile-time assertion that the repository satisfies the interface.

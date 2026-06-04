@@ -1,11 +1,11 @@
 package mongo
 
 import (
-	"errors"
-	"reflect"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/klemen-forstneric/ember"
@@ -67,21 +67,15 @@ func TestBuildFilter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := buildFilter(tt.filter)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("got %#v, want %#v", got, tt.want)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
 func TestBuildFilterUnsupportedValue(t *testing.T) {
 	_, err := buildFilter(ember.Eq("status", []string{"nope"}))
-	if !errors.Is(err, ember.ErrUnsupportedFilter) {
-		t.Errorf("got %v, want ErrUnsupportedFilter", err)
-	}
+	assert.ErrorIs(t, err, ember.ErrUnsupportedFilter)
 }
 
 // Compile-time assertion that the repository satisfies the interface.

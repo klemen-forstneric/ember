@@ -1,18 +1,17 @@
 package dynamo
 
 import (
-	"reflect"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMarshalData(t *testing.T) {
 	in := []byte(`{"status":"open","total":100,"active":true,"missing":null,"addr":{"city":"NYC"},"tags":["a","b"]}`)
 	got, err := marshalData(in)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.NoError(t, err)
 	want := map[string]types.AttributeValue{
 		"status":  &types.AttributeValueMemberS{Value: "open"},
 		"total":   &types.AttributeValueMemberN{Value: "100"},
@@ -26,19 +25,13 @@ func TestMarshalData(t *testing.T) {
 			&types.AttributeValueMemberS{Value: "b"},
 		}},
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("got %#v, want %#v", got, want)
-	}
+	assert.Equal(t, want, got)
 }
 
 func TestMarshalDataEmpty(t *testing.T) {
 	got, err := marshalData(nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(got) != 0 {
-		t.Errorf("got %#v, want empty map", got)
-	}
+	require.NoError(t, err)
+	assert.Empty(t, got)
 }
 
 // Round-trip must preserve an integer larger than 2^53, which a float64 decode
@@ -46,18 +39,13 @@ func TestMarshalDataEmpty(t *testing.T) {
 func TestDataRoundTripLargeInteger(t *testing.T) {
 	in := []byte(`{"id":9007199254740993}`)
 	av, err := marshalData(in)
-	if err != nil {
-		t.Fatalf("marshalData: %v", err)
-	}
+	require.NoError(t, err)
+
 	n, ok := av["id"].(*types.AttributeValueMemberN)
-	if !ok || n.Value != "9007199254740993" {
-		t.Fatalf("got %#v, want N 9007199254740993", av["id"])
-	}
+	require.True(t, ok, "expected an N attribute for id")
+	assert.Equal(t, "9007199254740993", n.Value)
+
 	out, err := unmarshalData(av)
-	if err != nil {
-		t.Fatalf("unmarshalData: %v", err)
-	}
-	if string(out) != `{"id":9007199254740993}` {
-		t.Errorf("round-trip got %s, want {\"id\":9007199254740993}", out)
-	}
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"id":9007199254740993}`, string(out))
 }

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/klemen-forstneric/ember"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/suite"
 )
 
 func envelope(eventType, entityID string) []ember.EventEnvelope {
@@ -19,75 +21,75 @@ func envelope(eventType, entityID string) []ember.EventEnvelope {
 	}}
 }
 
-func TestPublishRoutesByEventType(t *testing.T) {
-	reg := newFakeProducerRegistry()
-	p := NewPublisher(reg)
-
-	if err := p.Publish(context.Background(), envelope("order.created", "e1")); err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
-
-	prod, ok := reg.producers["order.created"]
-	if !ok {
-		t.Fatal("expected a producer resolved for order.created")
-	}
-	if len(prod.sent) != 1 {
-		t.Fatalf("expected 1 sent message, got %d", len(prod.sent))
-	}
-	if prod.sent[0].Key != "e1" {
-		t.Errorf("expected message keyed by entity id e1, got %q", prod.sent[0].Key)
-	}
+type PublisherSuite struct {
+	suite.Suite
+	reg *mockProducerRegistry
 }
 
-func TestPublishUnmappedTypeErrors(t *testing.T) {
-	reg := newFakeProducerRegistry()
-	reg.getErr = errors.New("unmapped event type")
-	p := NewPublisher(reg)
+func TestPublisherSuite(t *testing.T) {
+	suite.Run(t, new(PublisherSuite))
+}
+
+func (s *PublisherSuite) SetupTest() {
+	s.reg = &mockProducerRegistry{}
+}
+
+func (s *PublisherSuite) TestRoutesByEventType() {
+	prod := &mockProducer{}
+	prod.On("SendAsync", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
+	p := NewPublisher(s.reg)
+
+	err := p.Publish(context.Background(), envelope("order.created", "e1"))
+	s.Require().NoError(err)
+
+	sent := prod.sent()
+	s.Require().Len(sent, 1)
+	s.Equal("e1", sent[0].Key)
+}
+
+func (s *PublisherSuite) TestUnmappedTypeErrors() {
+	s.reg.On("Get", mock.Anything, "payment.refunded").Return(nil, errors.New("unmapped event type"))
+	p := NewPublisher(s.reg)
 
 	err := p.Publish(context.Background(), envelope("payment.refunded", "e1"))
-	if err == nil {
-		t.Fatal("expected an error for an unmapped event type")
-	}
+	s.Error(err)
 }
 
-func TestPublishMissingCorrelationIDErrors(t *testing.T) {
-	reg := newFakeProducerRegistry()
-	p := NewPublisher(reg)
+func (s *PublisherSuite) TestMissingCorrelationIDErrors() {
+	p := NewPublisher(s.reg)
 
 	e := envelope("order.created", "e1")
 	e[0].Metadata = ember.Metadata{} // no correlation id
 
-	if err := p.Publish(context.Background(), e); err == nil {
-		t.Fatal("expected an error for missing correlation id")
-	}
+	err := p.Publish(context.Background(), e)
+	s.Error(err)
+	// Validation happens before any producer is resolved.
+	s.reg.AssertNotCalled(s.T(), "Get")
 }
 
-func TestPublishAggregatesSendErrors(t *testing.T) {
-	reg := newFakeProducerRegistry()
-	reg.producers["order.created"] = &fakeProducer{sendErr: errors.New("boom")}
-	p := NewPublisher(reg)
+func (s *PublisherSuite) TestAggregatesSendErrors() {
+	prod := &mockProducer{}
+	prod.On("SendAsync", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("boom"))
+	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
+	p := NewPublisher(s.reg)
 
 	err := p.Publish(context.Background(), envelope("order.created", "e1"))
-	if err == nil {
-		t.Fatal("expected the aggregated send error")
-	}
+	s.Error(err)
 }
 
-func TestPublishEmptyIsNoop(t *testing.T) {
-	reg := newFakeProducerRegistry()
-	p := NewPublisher(reg)
-	if err := p.Publish(context.Background(), []ember.EventEnvelope{}); err != nil {
-		t.Fatalf("expected nil for empty publish, got %v", err)
-	}
+func (s *PublisherSuite) TestEmptyIsNoop() {
+	p := NewPublisher(s.reg)
+
+	err := p.Publish(context.Background(), []ember.EventEnvelope{})
+	s.Require().NoError(err)
+	s.reg.AssertNotCalled(s.T(), "Get")
 }
 
-func TestPublisherCloseClosesRegistry(t *testing.T) {
-	reg := newFakeProducerRegistry()
-	p := NewPublisher(reg)
-	if err := p.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if reg.closeCalls != 1 {
-		t.Errorf("expected registry Close called once, got %d", reg.closeCalls)
-	}
+func (s *PublisherSuite) TestCloseClosesRegistry() {
+	s.reg.On("Close").Return(nil)
+	p := NewPublisher(s.reg)
+
+	s.Require().NoError(p.Close())
+	s.reg.AssertNumberOfCalls(s.T(), "Close", 1)
 }

@@ -3,11 +3,14 @@ package pulsar
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/klemen-forstneric/ember"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/suite"
 )
 
 // stubMessage is a minimal pulsar.Message: only the methods the Subscriber
@@ -37,87 +40,87 @@ func msgFor(t *testing.T, eventType, entityID, correlationID string, redelivered
 	return pulsar.ConsumerMessage{Message: stubMessage{payload: payload, redelivered: redelivered}}
 }
 
-func TestSubscribeForwardsAndStampsMetadata(t *testing.T) {
-	c := newFakeConsumer(5)
-	reg := &fakeConsumerRegistry{subs: map[string][]consumer{
-		"projector": {c},
-	}}
-	s := NewSubscriber(reg, ember.NopLogger)
+type SubscriberSuite struct {
+	suite.Suite
+	reg *mockConsumerRegistry
+	sub *Subscriber
+}
 
-	out, err := s.Subscribe(context.Background(), "projector")
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
+func TestSubscriberSuite(t *testing.T) {
+	suite.Run(t, new(SubscriberSuite))
+}
 
-	c.in <- msgFor(t, "order.created", "e1", "corr-1", 2)
+func (s *SubscriberSuite) SetupTest() {
+	s.reg = &mockConsumerRegistry{}
+	s.sub = NewSubscriber(s.reg, ember.NopLogger)
+}
+
+// newConsumer builds a channel-backed consumer with the given delivery cap. Its
+// Ack/Nack/MaxDeliveries are optional (.Maybe) so each test asserts only the
+// behavior it exercises, via callCount.
+func (s *SubscriberSuite) newConsumer(maxDel int, capped bool) *mockConsumer {
+	c := newMockConsumer()
+	c.On("MaxDeliveries").Return(maxDel, capped).Maybe()
+	c.On("Ack", mock.Anything).Return(nil).Maybe()
+	c.On("Nack", mock.Anything).Return().Maybe()
+	c.On("Close").Return().Maybe()
+	return c
+}
+
+// start registers the consumers under "projector" and subscribes.
+func (s *SubscriberSuite) start(consumers ...consumer) <-chan ember.AckableEventEnvelope {
+	s.reg.On("Get", mock.Anything, "projector").Return(consumers, nil)
+	s.reg.On("Close").Return(nil).Maybe()
+
+	out, err := s.sub.Subscribe(context.Background(), "projector")
+	s.Require().NoError(err)
+	return out
+}
+
+func (s *SubscriberSuite) TestForwardsAndStampsMetadata() {
+	c := s.newConsumer(5, true)
+	out := s.start(c)
+
+	c.in <- msgFor(s.T(), "order.created", "e1", "corr-1", 2)
 
 	select {
 	case env := <-out:
-		if env.EntityID != "e1" {
-			t.Errorf("entity id: got %q", env.EntityID)
-		}
-		if got := env.Metadata[MetadataKeyCurrentDelivery]; got != 3 {
-			t.Errorf("current delivery: got %v, want 3", got)
-		}
-		if got := env.Metadata[MetadataKeyMaxDeliveries]; got != 5 {
-			t.Errorf("max deliveries: got %v, want 5", got)
-		}
-		if got := env.Metadata[MetadataKeyCorrelationID]; got != "corr-1" {
-			t.Errorf("correlation id: got %v", got)
-		}
+		s.Equal("e1", env.EntityID)
+		s.Equal(3, env.Metadata[MetadataKeyCurrentDelivery])
+		s.Equal(5, env.Metadata[MetadataKeyMaxDeliveries])
+		s.Equal("corr-1", env.Metadata[MetadataKeyCorrelationID])
 		env.Ack()
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for an envelope")
+		s.FailNow("timed out waiting for an envelope")
 	}
 
-	s.Stop()
-	if len(c.acked) != 1 {
-		t.Errorf("expected 1 ack, got %d", len(c.acked))
-	}
+	s.sub.Stop()
+	s.Equal(1, c.callCount("Ack"))
 }
 
-func TestSubscribeOmitsMaxDeliveriesWhenUncapped(t *testing.T) {
-	c := newUncappedConsumer()
-	reg := &fakeConsumerRegistry{subs: map[string][]consumer{
-		"projector": {c},
-	}}
-	s := NewSubscriber(reg, ember.NopLogger)
+func (s *SubscriberSuite) TestOmitsMaxDeliveriesWhenUncapped() {
+	c := s.newConsumer(0, false)
+	out := s.start(c)
 
-	out, err := s.Subscribe(context.Background(), "projector")
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-
-	c.in <- msgFor(t, "order.created", "e1", "corr-1", 0)
+	c.in <- msgFor(s.T(), "order.created", "e1", "corr-1", 0)
 
 	select {
 	case env := <-out:
-		if got := env.Metadata[MetadataKeyCurrentDelivery]; got != 1 {
-			t.Errorf("current delivery: got %v, want 1", got)
-		}
-		if _, ok := env.Metadata[MetadataKeyMaxDeliveries]; ok {
-			t.Error("max_deliveries should be absent when there is no cap")
-		}
+		s.Equal(1, env.Metadata[MetadataKeyCurrentDelivery])
+		s.NotContains(env.Metadata, MetadataKeyMaxDeliveries)
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for an envelope")
+		s.FailNow("timed out waiting for an envelope")
 	}
-	s.Stop()
+
+	s.sub.Stop()
 }
 
-func TestSubscribeFansInMultipleConsumers(t *testing.T) {
-	a, b := newFakeConsumer(1), newFakeConsumer(1)
-	reg := &fakeConsumerRegistry{subs: map[string][]consumer{
-		"projector": {a, b},
-	}}
-	s := NewSubscriber(reg, ember.NopLogger)
+func (s *SubscriberSuite) TestFansInMultipleConsumers() {
+	a, b := s.newConsumer(1, true), s.newConsumer(1, true)
+	out := s.start(a, b)
 
-	out, err := s.Subscribe(context.Background(), "projector")
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-
-	a.in <- msgFor(t, "order.created", "e1", "c", 0)
-	b.in <- msgFor(t, "order.created", "e2", "c", 0)
+	a.in <- msgFor(s.T(), "order.created", "e1", "c", 0)
+	b.in <- msgFor(s.T(), "order.created", "e2", "c", 0)
 
 	seen := map[string]bool{}
 	for i := 0; i < 2; i++ {
@@ -125,63 +128,44 @@ func TestSubscribeFansInMultipleConsumers(t *testing.T) {
 		case env := <-out:
 			seen[env.EntityID] = true
 		case <-time.After(time.Second):
-			t.Fatal("timed out")
+			s.FailNow("timed out")
 		}
 	}
-	if !seen["e1"] || !seen["e2"] {
-		t.Errorf("expected envelopes from both consumers, saw %v", seen)
-	}
-	s.Stop()
+	s.True(seen["e1"])
+	s.True(seen["e2"])
+
+	s.sub.Stop()
 }
 
-func TestSubscribeNackInvokesConsumer(t *testing.T) {
-	c := newFakeConsumer(1)
-	reg := &fakeConsumerRegistry{subs: map[string][]consumer{
-		"projector": {c},
-	}}
-	s := NewSubscriber(reg, ember.NopLogger)
+func (s *SubscriberSuite) TestNackInvokesConsumer() {
+	c := s.newConsumer(1, true)
+	out := s.start(c)
 
-	out, err := s.Subscribe(context.Background(), "projector")
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-
-	c.in <- msgFor(t, "order.created", "e1", "corr-1", 0)
+	c.in <- msgFor(s.T(), "order.created", "e1", "corr-1", 0)
 
 	select {
 	case env := <-out:
 		env.Nack()
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for an envelope")
+		s.FailNow("timed out waiting for an envelope")
 	}
 
-	s.Stop()
-	if len(c.nacked) != 1 {
-		t.Errorf("expected 1 nack, got %d", len(c.nacked))
-	}
-	if len(c.acked) != 0 {
-		t.Errorf("expected 0 acks, got %d", len(c.acked))
-	}
+	s.sub.Stop()
+	s.Equal(1, c.callCount("Nack"))
+	s.Equal(0, c.callCount("Ack"))
 }
 
-func TestSubscribeUnknownSubscriptionErrors(t *testing.T) {
-	reg := &fakeConsumerRegistry{subs: map[string][]consumer{}}
-	s := NewSubscriber(reg, ember.NopLogger)
-	if _, err := s.Subscribe(context.Background(), "nope"); err == nil {
-		t.Fatal("expected error for unknown subscription")
-	}
+func (s *SubscriberSuite) TestUnknownSubscriptionErrors() {
+	s.reg.On("Get", mock.Anything, "nope").Return(nil, errors.New("unknown subscription"))
+
+	_, err := s.sub.Subscribe(context.Background(), "nope")
+	s.Error(err)
 }
 
-func TestStopClosesRegistry(t *testing.T) {
-	reg := &fakeConsumerRegistry{subs: map[string][]consumer{
-		"projector": {newFakeConsumer(1)},
-	}}
-	s := NewSubscriber(reg, ember.NopLogger)
-	if _, err := s.Subscribe(context.Background(), "projector"); err != nil {
-		t.Fatal(err)
-	}
-	s.Stop()
-	if reg.closeCalls != 1 {
-		t.Errorf("expected registry Close called once, got %d", reg.closeCalls)
-	}
+func (s *SubscriberSuite) TestStopClosesRegistry() {
+	s.start(s.newConsumer(1, true))
+
+	s.sub.Stop()
+
+	s.reg.AssertNumberOfCalls(s.T(), "Close", 1)
 }
