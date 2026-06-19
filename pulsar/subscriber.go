@@ -65,9 +65,9 @@ func (s *Subscriber) Subscribe(ctx context.Context, name string) (<-chan ember.A
 					}
 
 					metadata[MetadataKeyCorrelationID] = m.CorrelationID
-					metadata[MetadataKeyCurrentDelivery] = int(msg.RedeliveryCount() + 1)
+					metadata[ember.MetadataKeyCurrentDelivery] = int(msg.RedeliveryCount() + 1)
 					if v, ok := c.MaxDeliveries(); ok {
-						metadata[MetadataKeyMaxDeliveries] = v
+						metadata[ember.MetadataKeyMaxDeliveries] = v
 					}
 
 					envelope := ember.AckableEventEnvelope{

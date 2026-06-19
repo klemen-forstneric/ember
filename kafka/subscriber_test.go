@@ -70,8 +70,8 @@ func (s *SubscriberSuite) TestForwardsStampsAndCommitsOnAck() {
 	select {
 	case env := <-out:
 		s.Equal("e1", env.EntityID)
-		s.Equal(1, env.Metadata[MetadataKeyCurrentDelivery])
-		s.Equal(5, env.Metadata[MetadataKeyMaxDeliveries])
+		s.Equal(1, env.Metadata[ember.MetadataKeyCurrentDelivery])
+		s.Equal(5, env.Metadata[ember.MetadataKeyMaxDeliveries])
 		s.Equal("corr-1", env.Metadata[MetadataKeyCorrelationID])
 		env.Ack()
 	case <-time.After(time.Second):
@@ -92,8 +92,8 @@ func (s *SubscriberSuite) TestOmitsMaxDeliveriesWhenUncapped() {
 
 	select {
 	case env := <-out:
-		s.Equal(1, env.Metadata[MetadataKeyCurrentDelivery])
-		s.NotContains(env.Metadata, MetadataKeyMaxDeliveries)
+		s.Equal(1, env.Metadata[ember.MetadataKeyCurrentDelivery])
+		s.NotContains(env.Metadata, ember.MetadataKeyMaxDeliveries)
 		env.Ack()
 	case <-time.After(time.Second):
 		s.FailNow("timed out waiting for an envelope")
@@ -144,7 +144,7 @@ func (s *SubscriberSuite) TestRetriesNackedMessageThenCommits() {
 	// First delivery: attempt 1, nack it.
 	select {
 	case env := <-out:
-		s.Equal(1, env.Metadata[MetadataKeyCurrentDelivery])
+		s.Equal(1, env.Metadata[ember.MetadataKeyCurrentDelivery])
 		env.Nack()
 	case <-time.After(time.Second):
 		s.FailNow("timed out on first delivery")
@@ -153,7 +153,7 @@ func (s *SubscriberSuite) TestRetriesNackedMessageThenCommits() {
 	// Redelivery: attempt 2, ack it.
 	select {
 	case env := <-out:
-		s.Equal(2, env.Metadata[MetadataKeyCurrentDelivery])
+		s.Equal(2, env.Metadata[ember.MetadataKeyCurrentDelivery])
 		env.Ack()
 	case <-time.After(time.Second):
 		s.FailNow("timed out on redelivery")
@@ -176,7 +176,7 @@ func (s *SubscriberSuite) TestDropsAndCommitsWhenCapReached() {
 	// Attempt 2 -> nack -> cap reached -> dropped + committed.
 	select {
 	case env := <-out:
-		s.Equal(2, env.Metadata[MetadataKeyCurrentDelivery])
+		s.Equal(2, env.Metadata[ember.MetadataKeyCurrentDelivery])
 		env.Nack()
 	case <-time.After(time.Second):
 		s.FailNow("timed out on second delivery")
@@ -280,7 +280,7 @@ func (s *SubscriberSuite) TestRetriesMultipleNackedMessages() {
 	for i := 0; i < 3; i++ {
 		select {
 		case env := <-out:
-			s.Equal(1, env.Metadata[MetadataKeyCurrentDelivery])
+			s.Equal(1, env.Metadata[ember.MetadataKeyCurrentDelivery])
 			env.Nack()
 		case <-time.After(time.Second):
 			s.FailNow("timed out on first deliveries")
@@ -291,7 +291,7 @@ func (s *SubscriberSuite) TestRetriesMultipleNackedMessages() {
 	for i := 0; i < 3; i++ {
 		select {
 		case env := <-out:
-			s.Equal(2, env.Metadata[MetadataKeyCurrentDelivery])
+			s.Equal(2, env.Metadata[ember.MetadataKeyCurrentDelivery])
 			env.Ack()
 		case <-time.After(time.Second):
 			s.FailNow("timed out on redeliveries")

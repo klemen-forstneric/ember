@@ -7,10 +7,10 @@ import (
 	"github.com/klemen-forstneric/ember"
 )
 
+// The delivery-count keys (current_delivery, max_deliveries) live in the core
+// ember package; the subscriber stamps them via ember.MetadataKey*.
 const (
-	MetadataKeyCurrentDelivery ember.MetadataKey = "current_delivery"
-	MetadataKeyMaxDeliveries   ember.MetadataKey = "max_deliveries"
-	MetadataKeyCorrelationID   ember.MetadataKey = "correlation_id"
+	MetadataKeyCorrelationID ember.MetadataKey = "correlation_id"
 )
 
 // message is the wire envelope serialized to and from the Pulsar payload.

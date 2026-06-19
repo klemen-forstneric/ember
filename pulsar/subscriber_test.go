@@ -86,8 +86,8 @@ func (s *SubscriberSuite) TestForwardsAndStampsMetadata() {
 	select {
 	case env := <-out:
 		s.Equal("e1", env.EntityID)
-		s.Equal(3, env.Metadata[MetadataKeyCurrentDelivery])
-		s.Equal(5, env.Metadata[MetadataKeyMaxDeliveries])
+		s.Equal(3, env.Metadata[ember.MetadataKeyCurrentDelivery])
+		s.Equal(5, env.Metadata[ember.MetadataKeyMaxDeliveries])
 		s.Equal("corr-1", env.Metadata[MetadataKeyCorrelationID])
 		env.Ack()
 	case <-time.After(time.Second):
@@ -106,8 +106,8 @@ func (s *SubscriberSuite) TestOmitsMaxDeliveriesWhenUncapped() {
 
 	select {
 	case env := <-out:
-		s.Equal(1, env.Metadata[MetadataKeyCurrentDelivery])
-		s.NotContains(env.Metadata, MetadataKeyMaxDeliveries)
+		s.Equal(1, env.Metadata[ember.MetadataKeyCurrentDelivery])
+		s.NotContains(env.Metadata, ember.MetadataKeyMaxDeliveries)
 	case <-time.After(time.Second):
 		s.FailNow("timed out waiting for an envelope")
 	}

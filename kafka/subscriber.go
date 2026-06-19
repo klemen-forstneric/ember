@@ -179,9 +179,9 @@ func (s *session) deliver(m kafka.Message) {
 		metadata = make(ember.Metadata)
 	}
 	metadata[MetadataKeyCorrelationID] = msg.CorrelationID
-	metadata[MetadataKeyCurrentDelivery] = s.tracker.attempt(m)
+	metadata[ember.MetadataKeyCurrentDelivery] = s.tracker.attempt(m)
 	if limit, capped := s.reader.MaxDeliveries(); capped {
-		metadata[MetadataKeyMaxDeliveries] = limit
+		metadata[ember.MetadataKeyMaxDeliveries] = limit
 	}
 
 	envelope := ember.AckableEventEnvelope{
