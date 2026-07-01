@@ -1,0 +1,71 @@
+package embermem
+
+import (
+	"context"
+	"testing"
+
+	"github.com/klemen-forstneric/ember"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func me(id, typ string, ver uint64, data string) *ember.MarshaledEntity {
+	// ver is the desired stored value; produce initial=ver-1 + one Inc so Save
+	// sees initial==0 for a fresh insert (ver==1) or initial==n-1 for an update.
+	v := ember.NewVersion(ver - 1).Inc()
+	return &ember.MarshaledEntity{ID: id, Type: typ, Version: v, Data: []byte(data)}
+}
+
+func TestSaveOptimisticVersion(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	// initial 0 -> stored value 1
+	require.NoError(t, r.Save(ctx, &ember.MarshaledEntity{ID: "1", Type: "t", Version: ember.NewVersion(0).Inc()}))
+	// stale save (initial 0 again) conflicts
+	require.ErrorIs(t, r.Save(ctx, &ember.MarshaledEntity{ID: "1", Type: "t", Version: ember.NewVersion(0).Inc()}), ember.ErrVersionConflict)
+}
+
+func TestListFilterEqAndAnd(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, me("1", "t", 1, `{"user":"a","kind":"x"}`)))
+	require.NoError(t, r.Save(ctx, me("2", "t", 1, `{"user":"a","kind":"y"}`)))
+	require.NoError(t, r.Save(ctx, me("3", "t", 1, `{"user":"b","kind":"x"}`)))
+
+	got, err := r.List(ctx, "t", ember.And(ember.Eq("user", "a"), ember.Eq("kind", "x")), ember.Sort{})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "1", got[0].ID)
+}
+
+func TestListSort(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, me("1", "t", 1, `{"created_at":"2026-01-03"}`)))
+	require.NoError(t, r.Save(ctx, me("2", "t", 1, `{"created_at":"2026-01-01"}`)))
+	require.NoError(t, r.Save(ctx, me("3", "t", 1, `{"created_at":"2026-01-02"}`)))
+
+	asc, err := r.List(ctx, "t", nil, ember.Asc("created_at"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"2", "3", "1"}, []string{asc[0].ID, asc[1].ID, asc[2].ID})
+
+	desc, err := r.List(ctx, "t", nil, ember.Desc("created_at"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1", "3", "2"}, []string{desc[0].ID, desc[1].ID, desc[2].ID})
+}
+
+func TestListNegationAndExistence(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, me("1", "t", 1, `{"user":"a"}`)))
+	require.NoError(t, r.Save(ctx, me("2", "t", 1, `{"user":"b"}`)))
+	require.NoError(t, r.Save(ctx, me("3", "t", 1, `{}`)))
+
+	notA, err := r.List(ctx, "t", ember.Not(ember.Eq("user", "a")), ember.Sort{})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"2", "3"}, []string{notA[0].ID, notA[1].ID})
+
+	hasUser, err := r.List(ctx, "t", ember.Exists("user", true), ember.Sort{})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"1", "2"}, []string{hasUser[0].ID, hasUser[1].ID})
+}
