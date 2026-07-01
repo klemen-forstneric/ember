@@ -86,3 +86,35 @@ func TestListNegationAndExistence(t *testing.T) {
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"1", "2"}, []string{hasUser[0].ID, hasUser[1].ID})
 }
+
+// Sort is lexical (text) ordering, matching the SQL backend's uncast jsonb text
+// extraction — numeric values order as text ("10" < "2" < "9"), NOT numerically.
+func TestListSortIsLexical(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, me("a", "t", 1, `{"n":9}`)))
+	require.NoError(t, r.Save(ctx, me("b", "t", 1, `{"n":10}`)))
+	require.NoError(t, r.Save(ctx, me("c", "t", 1, `{"n":2}`)))
+
+	got, err := r.List(ctx, "t", nil, ember.Asc("n"))
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, []string{"b", "c", "a"}, []string{got[0].ID, got[1].ID, got[2].ID})
+}
+
+// Data returned from the store must not alias stored state: mutating a returned
+// Data slice must not corrupt the repository.
+func TestListGetDoNotAliasData(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, me("1", "t", 1, `{"k":"v"}`)))
+
+	got, err := r.Get(ctx, "t", "1")
+	require.NoError(t, err)
+	require.NotEmpty(t, got.Data)
+	got.Data[0] = 'X' // mutate the returned slice in place
+
+	again, err := r.Get(ctx, "t", "1")
+	require.NoError(t, err)
+	assert.Equal(t, byte('{'), again.Data[0]) // store uncorrupted
+}

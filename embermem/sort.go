@@ -8,28 +8,45 @@ import (
 	"github.com/klemen-forstneric/ember"
 )
 
-func applySort(items []*ember.MarshaledEntity, s ember.Sort) error {
+// applySort orders items by the sort path using LEXICAL (text) comparison, to
+// mirror the SQL backend which extracts a jsonb field as text for ORDER BY
+// (no cast). Sort is thus defined for lexically-orderable fields (strings, e.g.
+// RFC3339 timestamps); ordering of numeric fields is not guaranteed to match
+// across backends. Missing-path placement (here: last) is backend-defined.
+func applySort(items []*ember.MarshaledEntity, s ember.Sort) {
 	if s.Path == "" {
-		return nil
+		return
 	}
-	var cmpErr error
 	sort.SliceStable(items, func(i, j int) bool {
 		vi, oki, _ := lookup(items[i], s.Path)
 		vj, okj, _ := lookup(items[j], s.Path)
-		if !oki || !okj { // missing paths sort last (stable)
+		if !oki || !okj { // missing paths sort last
 			return oki && !okj
 		}
-		c, ok := orderJSON(vi, vj)
-		if !ok {
-			cmpErr = ember.ErrUnsupportedSort
-			return false
-		}
+		ti, tj := textOf(vi), textOf(vj)
 		if s.Direction == ember.Descending {
-			return c > 0
+			return ti > tj
 		}
-		return c < 0
+		return ti < tj
 	})
-	return cmpErr
+}
+
+// textOf renders a looked-up value to the text form used for lexical ordering,
+// matching how the SQL backend extracts a jsonb field as text.
+func textOf(v any) string {
+	if s, ok := toStr(v); ok {
+		return s
+	}
+	if f, ok := toFloat(v); ok {
+		return strconvFloat(f)
+	}
+	if b, ok := v.(bool); ok {
+		if b {
+			return "true"
+		}
+		return "false"
+	}
+	return ""
 }
 
 // equalJSON compares a looked-up JSON value against a filter operand, coercing

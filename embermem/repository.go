@@ -4,11 +4,20 @@
 package embermem
 
 import (
+	"bytes"
 	"context"
 	"sync"
 
 	"github.com/klemen-forstneric/ember"
 )
+
+// clone returns a deep copy of a marshaled entity so stored state and returned
+// results never alias the caller's Data slice.
+func clone(m *ember.MarshaledEntity) *ember.MarshaledEntity {
+	c := *m
+	c.Data = bytes.Clone(m.Data)
+	return &c
+}
 
 var _ ember.EntityRepository = (*EntityRepository)(nil)
 
@@ -39,9 +48,9 @@ func (r *EntityRepository) Save(_ context.Context, m *ember.MarshaledEntity) err
 	// Normalize to NewVersion(Value()) to match real backends (e.g. Mongo stores
 	// the uint64 value and reconstructs with NewVersion on read). This ensures
 	// that an entity fetched via Get and then re-saved does not self-conflict.
-	stored := *m
+	stored := clone(m)
 	stored.Version = ember.NewVersion(m.Version.Value())
-	r.docs[k] = &stored
+	r.docs[k] = stored
 	return nil
 }
 
@@ -49,8 +58,7 @@ func (r *EntityRepository) Get(_ context.Context, typ, id string) (*ember.Marsha
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if m, ok := r.docs[key(typ, id)]; ok {
-		clone := *m
-		return &clone, nil
+		return clone(m), nil
 	}
 	return nil, ember.ErrEntityNotFound
 }
@@ -69,13 +77,10 @@ func (r *EntityRepository) List(_ context.Context, typ string, f ember.Filter, s
 			return nil, err
 		}
 		if ok {
-			clone := *m
-			out = append(out, &clone)
+			out = append(out, clone(m))
 		}
 	}
 
-	if err := applySort(out, s); err != nil {
-		return nil, err
-	}
+	applySort(out, s)
 	return out, nil
 }

@@ -11,9 +11,15 @@ const (
 )
 
 // Sort orders a List by a single entity path. The zero value (empty Path) means
-// unordered. Path uses the same semantics as Filter: reserved paths (id, type,
-// version) address top-level storage; any other path addresses a field of the
-// entity's data document.
+// unordered (see Unsorted). Path uses the same semantics as Filter: reserved
+// paths (id, type, version) address top-level storage; any other path addresses
+// a field of the entity's data document.
+//
+// Ordering is LEXICAL (text) — backends order the field as extracted text, so
+// Sort is intended for lexically-orderable fields such as strings and RFC3339
+// timestamps. Ordering of numeric fields, and the placement of rows missing the
+// sort field, are backend-defined and not guaranteed to be identical across
+// backends.
 type Sort struct {
 	Path      string
 	Direction Direction
