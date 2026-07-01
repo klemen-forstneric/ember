@@ -19,6 +19,10 @@ type Sort struct {
 	Direction Direction
 }
 
+// Unsorted expresses that a List has no ordering requirement. Prefer it over a
+// bare Sort{} at call sites so the intent ("order does not matter") is explicit.
+func Unsorted() Sort { return Sort{} }
+
 // Asc orders ascending by path.
 func Asc(path string) Sort { return Sort{Path: path, Direction: Ascending} }
 
