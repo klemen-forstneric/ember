@@ -25,6 +25,23 @@ func TestSaveOptimisticVersion(t *testing.T) {
 	require.ErrorIs(t, r.Save(ctx, &ember.MarshaledEntity{ID: "1", Type: "t", Version: ember.NewVersion(0).Inc()}), ember.ErrVersionConflict)
 }
 
+// A Get then re-Save of the same entity must not self-conflict: Get must return
+// a normalized version (initial == stored value) so the caller's next Inc+Save
+// filters on the just-persisted value — matching the real backends.
+func TestGetThenResaveRoundTrip(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, &ember.MarshaledEntity{ID: "1", Type: "t", Version: ember.NewVersion(0).Inc()}))
+
+	got, err := r.Get(ctx, "t", "1")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), got.Version.Value())
+	assert.Equal(t, uint64(1), got.Version.Initial()) // normalized on store
+
+	got.Version = got.Version.Inc() // caller mutates + bumps
+	require.NoError(t, r.Save(ctx, got))
+}
+
 func TestListFilterEqAndAnd(t *testing.T) {
 	r := New()
 	ctx := context.Background()
