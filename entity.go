@@ -93,13 +93,23 @@ func (s *EntityStore[E]) List(ctx context.Context, f Filter) ([]E, error) {
 }
 
 func (s *EntityStore[E]) Save(ctx context.Context, e E) error {
-	v := e.Version().Inc()
-	e.SetVersion(v)
+	next := e.Version().Inc()
+	e.SetVersion(next)
 
 	m, err := s.marshaler.Marshal(ctx, e)
 	if err != nil {
 		return err
 	}
 
-	return s.repository.Save(ctx, m)
+	if err := s.repository.Save(ctx, m); err != nil {
+		return err
+	}
+
+	// Collapse the version so a subsequent Save of the same in-memory entity
+	// filters on the just-persisted version rather than the original Initial().
+	// Without this, repeated saves of one instance (e.g. a streamed message
+	// persisted across create -> partial flushes -> complete) self-conflict,
+	// because Version.Inc keeps the original Initial() across increments.
+	e.SetVersion(NewVersion(next.Value()))
+	return nil
 }

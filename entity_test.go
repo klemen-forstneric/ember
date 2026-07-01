@@ -6,8 +6,71 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
+
+// versionedRepo is an in-memory EntityRepository that enforces optimistic
+// concurrency the way the persistent backends do: a save whose expected
+// (initial) version does not match the stored version is rejected. It exists to
+// exercise repeated saves of a single in-memory entity.
+type versionedRepo struct{ docs map[string]*MarshaledEntity }
+
+func newVersionedRepo() *versionedRepo { return &versionedRepo{docs: map[string]*MarshaledEntity{}} }
+
+func (r *versionedRepo) Save(_ context.Context, m *MarshaledEntity) error {
+	key := m.Type + "/" + m.ID
+	if cur, ok := r.docs[key]; ok {
+		if cur.Version.Value() != m.Version.Initial() {
+			return ErrVersionConflict
+		}
+	} else if m.Version.Initial() != 0 {
+		return ErrVersionConflict
+	}
+	stored := *m
+	r.docs[key] = &stored
+	return nil
+}
+
+func (r *versionedRepo) Get(_ context.Context, typ, id string) (*MarshaledEntity, error) {
+	if m, ok := r.docs[typ+"/"+id]; ok {
+		return m, nil
+	}
+	return nil, ErrEntityNotFound
+}
+
+func (r *versionedRepo) List(context.Context, string, Filter) ([]*MarshaledEntity, error) {
+	return nil, nil
+}
+
+// versionMarshaler mirrors the version handling of the real JSON marshaler
+// without pulling in the ember/json package (which would import ember).
+type versionMarshaler struct{}
+
+func (versionMarshaler) Marshal(_ context.Context, e *fakeEntity) (*MarshaledEntity, error) {
+	return &MarshaledEntity{ID: e.ID(), Type: e.Type(), Version: e.Version()}, nil
+}
+
+func (versionMarshaler) Unmarshal(_ context.Context, m *MarshaledEntity) (*fakeEntity, error) {
+	e := newFakeEntity(m.ID)
+	e.SetVersion(m.Version)
+	return e, nil
+}
+
+// A single in-memory entity saved repeatedly (create, then updates) must not
+// self-conflict: after each save the store collapses the version so the next
+// save's optimistic filter matches the just-persisted version.
+func TestEntityStoreRepeatedSaveOfSameInstance(t *testing.T) {
+	store := NewEntityStore[*fakeEntity](newVersionedRepo(), versionMarshaler{})
+	ctx := context.Background()
+	e := newFakeEntity("1")
+
+	require.NoError(t, store.Save(ctx, e)) // create -> stored version 1
+	e.Name = "second"
+	require.NoError(t, store.Save(ctx, e)) // stored version 2
+	e.Name = "third"
+	require.NoError(t, store.Save(ctx, e)) // stored version 3
+}
 
 // fakeEntity is a minimal Entity used as test data for store tests.
 type fakeEntity struct {
