@@ -50,7 +50,7 @@ type EntityMarshaler[E Entity] interface {
 type EntityRepository interface {
 	Save(ctx context.Context, m *MarshaledEntity) error
 	Get(ctx context.Context, typ, id string) (*MarshaledEntity, error)
-	List(ctx context.Context, typ string, f Filter) ([]*MarshaledEntity, error)
+	List(ctx context.Context, typ string, f Filter, s Sort) ([]*MarshaledEntity, error)
 }
 
 // EntityStore
@@ -73,9 +73,9 @@ func (s *EntityStore[E]) Get(ctx context.Context, id string) (E, error) {
 	return s.marshaler.Unmarshal(ctx, m)
 }
 
-func (s *EntityStore[E]) List(ctx context.Context, f Filter) ([]E, error) {
+func (s *EntityStore[E]) List(ctx context.Context, f Filter, sort Sort) ([]E, error) {
 	var empty E
-	ms, err := s.repository.List(ctx, empty.Type(), f)
+	ms, err := s.repository.List(ctx, empty.Type(), f, sort)
 	if err != nil {
 		return nil, err
 	}

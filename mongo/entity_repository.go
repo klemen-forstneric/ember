@@ -84,7 +84,7 @@ func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.Mars
 	}, nil
 }
 
-func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter) ([]*ember.MarshaledEntity, error) {
+func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter, s ember.Sort) ([]*ember.MarshaledEntity, error) {
 	predicate, err := buildFilter(f)
 	if err != nil {
 		return nil, err
@@ -98,7 +98,16 @@ func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter)
 		}}}
 	}
 
-	cur, err := r.collection.Find(ctx, filter)
+	opts := options.Find()
+	if s.Path != "" {
+		dir := 1
+		if s.Direction == ember.Descending {
+			dir = -1
+		}
+		opts.SetSort(bson.D{{Key: field(s.Path), Value: dir}})
+	}
+
+	cur, err := r.collection.Find(ctx, filter, opts)
 	if err != nil {
 		return nil, err
 	}

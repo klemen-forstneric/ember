@@ -82,7 +82,10 @@ func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.Mars
 	return itemToEntity(out.Item)
 }
 
-func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter) ([]*ember.MarshaledEntity, error) {
+func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter, s ember.Sort) ([]*ember.MarshaledEntity, error) {
+	if s.Path != "" {
+		return nil, ember.ErrUnsupportedSort
+	}
 	filter, hasFilter, err := buildFilter(f)
 	if err != nil {
 		return nil, err

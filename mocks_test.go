@@ -24,8 +24,8 @@ func (m *mockEntityRepository) Get(ctx context.Context, typ, id string) (*Marsha
 	return out, args.Error(1)
 }
 
-func (m *mockEntityRepository) List(ctx context.Context, typ string, f Filter) ([]*MarshaledEntity, error) {
-	args := m.Called(ctx, typ, f)
+func (m *mockEntityRepository) List(ctx context.Context, typ string, f Filter, s Sort) ([]*MarshaledEntity, error) {
+	args := m.Called(ctx, typ, f, s)
 	var out []*MarshaledEntity
 	if v := args.Get(0); v != nil {
 		out = v.([]*MarshaledEntity)

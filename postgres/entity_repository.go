@@ -83,7 +83,7 @@ func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.Mars
 	}, nil
 }
 
-func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter) ([]*ember.MarshaledEntity, error) {
+func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter, s ember.Sort) ([]*ember.MarshaledEntity, error) {
 	pred, err := buildPredicate(f)
 	if err != nil {
 		return nil, err
@@ -92,6 +92,14 @@ func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter)
 	qb := psql.Select("id", "version", "data").From(r.table).Where(sq.Eq{"type": typ})
 	if pred != nil {
 		qb = qb.Where(pred) // multiple Where clauses are AND-ed together
+	}
+	if s.Path != "" {
+		col, _ := column(s.Path)
+		dir := "ASC"
+		if s.Direction == ember.Descending {
+			dir = "DESC"
+		}
+		qb = qb.OrderBy(col + " " + dir)
 	}
 
 	query, args, err := qb.ToSql()

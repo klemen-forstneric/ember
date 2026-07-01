@@ -39,7 +39,7 @@ func (r *versionedRepo) Get(_ context.Context, typ, id string) (*MarshaledEntity
 	return nil, ErrEntityNotFound
 }
 
-func (r *versionedRepo) List(context.Context, string, Filter) ([]*MarshaledEntity, error) {
+func (r *versionedRepo) List(context.Context, string, Filter, Sort) ([]*MarshaledEntity, error) {
 	return nil, nil
 }
 
@@ -118,11 +118,11 @@ func (s *EntityStoreSuite) TestList() {
 
 	f := Eq("name", "alice")
 	// Expecting the store to forward the entity type and filter unchanged.
-	s.repo.On("List", mock.Anything, "fake", f).Return([]*MarshaledEntity{m1, m2}, nil)
+	s.repo.On("List", mock.Anything, "fake", f, Sort{}).Return([]*MarshaledEntity{m1, m2}, nil)
 	s.marshaler.On("Unmarshal", mock.Anything, m1).Return(e1, nil)
 	s.marshaler.On("Unmarshal", mock.Anything, m2).Return(e2, nil)
 
-	got, err := s.store.List(s.ctx, f)
+	got, err := s.store.List(s.ctx, f, Sort{})
 
 	s.Require().NoError(err)
 	s.Equal([]*fakeEntity{e1, e2}, got)
@@ -130,19 +130,19 @@ func (s *EntityStoreSuite) TestList() {
 
 func (s *EntityStoreSuite) TestListError() {
 	sentinel := errors.New("boom")
-	s.repo.On("List", mock.Anything, "fake", mock.Anything).Return(nil, sentinel)
+	s.repo.On("List", mock.Anything, "fake", mock.Anything, mock.Anything).Return(nil, sentinel)
 
-	_, err := s.store.List(s.ctx, nil)
+	_, err := s.store.List(s.ctx, nil, Sort{})
 
 	s.ErrorIs(err, sentinel)
 }
 
 func (s *EntityStoreSuite) TestListUnmarshalError() {
 	m1 := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1), Data: []byte("alice")}
-	s.repo.On("List", mock.Anything, "fake", mock.Anything).Return([]*MarshaledEntity{m1}, nil)
+	s.repo.On("List", mock.Anything, "fake", mock.Anything, mock.Anything).Return([]*MarshaledEntity{m1}, nil)
 	s.marshaler.On("Unmarshal", mock.Anything, m1).Return(nil, errors.New("unmarshal boom"))
 
-	got, err := s.store.List(s.ctx, nil)
+	got, err := s.store.List(s.ctx, nil, Sort{})
 
 	s.Require().Error(err)
 	s.Nil(got)
