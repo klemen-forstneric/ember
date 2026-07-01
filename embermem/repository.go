@@ -36,7 +36,11 @@ func (r *EntityRepository) Save(_ context.Context, m *ember.MarshaledEntity) err
 	} else if m.Version.Initial() != 0 {
 		return ember.ErrVersionConflict
 	}
+	// Normalize to NewVersion(Value()) to match real backends (e.g. Mongo stores
+	// the uint64 value and reconstructs with NewVersion on read). This ensures
+	// that an entity fetched via Get and then re-saved does not self-conflict.
 	stored := *m
+	stored.Version = ember.NewVersion(m.Version.Value())
 	r.docs[k] = &stored
 	return nil
 }
