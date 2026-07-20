@@ -168,3 +168,25 @@ func (s *NotifierSuite) TestRunStopsOnContextCancel() {
 		s.FailNow("Run did not return after context cancel")
 	}
 }
+
+func (s *NotifierSuite) TestRunStopsOnClose() {
+	// Always not-leader so ticks are cheap; Run must exit once Close is called.
+	s.locker.On("TryLock", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil)
+
+	done := make(chan struct{})
+	go func() { s.n.Run(context.Background()); close(done) }()
+
+	s.Require().NoError(s.n.Close())
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		s.FailNow("Run did not return after Close")
+	}
+}
+
+func (s *NotifierSuite) TestCloseIsIdempotent() {
+	s.NotPanics(func() {
+		s.NoError(s.n.Close())
+		s.NoError(s.n.Close())
+	})
+}

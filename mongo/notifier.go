@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/rand/v2"
+	"sync"
 	"time"
 
 	"github.com/klemen-forstneric/ember"
@@ -38,6 +39,8 @@ type Notifier struct {
 	locker    middleware.Locker
 	logger    ember.LoggerCtx
 	cfg       NotifierConfig
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 func NewNotifier(store outboxStore, transport ext.Transport, locker middleware.Locker, logger ember.LoggerCtx, cfg NotifierConfig) *Notifier {
@@ -56,7 +59,7 @@ func NewNotifier(store outboxStore, transport ext.Transport, locker middleware.L
 	if logger == nil {
 		logger = ember.NopLogger
 	}
-	return &Notifier{store: store, transport: transport, locker: locker, logger: logger, cfg: cfg}
+	return &Notifier{store: store, transport: transport, locker: locker, logger: logger, cfg: cfg, done: make(chan struct{})}
 }
 
 // Notify satisfies ember.Notifier. Delivery is deferred to Run, so this is a
@@ -144,12 +147,18 @@ func (n *Notifier) tick(ctx context.Context) {
 // giving effective pickup latency well below the idle interval.
 func (n *Notifier) Run(ctx context.Context) {
 	for {
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
 			return
+		case <-n.done:
+			return
+		default:
 		}
 		n.tick(ctx)
 		select {
 		case <-ctx.Done():
+			return
+		case <-n.done:
 			return
 		case <-time.After(n.interval()):
 		}
@@ -160,6 +169,10 @@ func (n *Notifier) interval() time.Duration {
 	return n.cfg.IdleInterval + time.Duration(rand.Int64N(int64(n.cfg.IdleInterval)))
 }
 
-// Close is reserved for symmetry with other transports; the relay holds no
-// resources between ticks, so shutdown is via cancelling Run's context.
-func (n *Notifier) Close() error { return nil }
+// Close stops Run after the in-flight tick completes; safe to call more than
+// once. Cancelling Run's context stops it too — Close is the explicit handle
+// for callers that don't hold the cancel func.
+func (n *Notifier) Close() error {
+	n.closeOnce.Do(func() { close(n.done) })
+	return nil
+}
