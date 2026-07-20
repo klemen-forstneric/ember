@@ -35,9 +35,13 @@ func (s *EnsureOutboxSuite) TestCreatesIndexes() {
 	for _, spec := range specs {
 		if _, ok := spec["partialFilterExpression"]; ok {
 			hasPartial = true
+			s.Equal(bson.D{{Key: "seq", Value: int32(1)}}, spec["key"])
+			s.Equal(bson.D{{Key: "published", Value: false}}, spec["partialFilterExpression"])
 		}
 		if _, ok := spec["expireAfterSeconds"]; ok {
 			hasTTL = true
+			s.Equal(bson.D{{Key: "expires_at", Value: int32(1)}}, spec["key"])
+			s.Equal(int32(0), spec["expireAfterSeconds"])
 		}
 	}
 	s.True(hasPartial, "expected a partial pending index")
