@@ -112,7 +112,7 @@ func (n *Notifier) publishBatch(ctx context.Context) (int, error) {
 func (n *Notifier) tick(ctx context.Context) {
 	lock, err := n.locker.TryLock(ctx, n.cfg.LockKey, n.cfg.LockTTL)
 	if err != nil {
-		n.logger.Error(ctx, "outbox lock error", err, "key", n.cfg.LockKey)
+		n.logger.Error(ctx, "Failed to acquire outbox lock", err, "key", n.cfg.LockKey)
 		return
 	}
 	if lock == nil {
@@ -120,7 +120,7 @@ func (n *Notifier) tick(ctx context.Context) {
 	}
 	defer func() {
 		if err := lock.Release(context.WithoutCancel(ctx)); err != nil {
-			n.logger.Warn(ctx, "outbox lock release failed", "key", n.cfg.LockKey, "error", err)
+			n.logger.Warn(ctx, "Failed to release outbox lock", "key", n.cfg.LockKey, "error", err)
 		}
 	}()
 
@@ -130,7 +130,7 @@ func (n *Notifier) tick(ctx context.Context) {
 		}
 		published, err := n.publishBatch(ctx)
 		if err != nil {
-			n.logger.Error(ctx, "outbox batch error", err)
+			n.logger.Error(ctx, "Failed to drain outbox batch", err)
 			return
 		}
 		if published < n.cfg.BatchSize {
