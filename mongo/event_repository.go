@@ -74,11 +74,14 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]emb
 			return nil, err
 		}
 		out = append(out, ember.EventEnvelope{
-			ID:        d.ID,
-			EntityID:  d.EntityID,
-			Event:     &ember.MarshaledEvent{Type: d.Type, Data: d.Data},
+			ID:       d.ID,
+			EntityID: d.EntityID,
+			Event: &ember.MarshaledEvent{
+				Type: d.Type,
+				Data: d.Data,
+			},
 			Metadata:  d.Metadata,
-			Timestamp: time.Unix(0, d.Seq).UTC(),
+			Timestamp: d.CreatedAt,
 		})
 	}
 	if err := cur.Err(); err != nil {

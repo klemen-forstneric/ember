@@ -48,9 +48,9 @@ func (s *EventRepositorySuite) TestSaveThenListUnpublishedOrdersBySeq() {
 	base := time.Unix(1_700_000_000, 0).UTC()
 	// Saved out of order; expect list back in seq (timestamp) order.
 	s.Require().NoError(s.repo.Save(ctx, []ember.EventEnvelope{
-		env("e2", "A", base.Add(2*time.Nanosecond)),
-		env("e1", "A", base.Add(1*time.Nanosecond)),
-		env("e3", "B", base.Add(3*time.Nanosecond)),
+		env("e2", "A", base.Add(2*time.Millisecond)),
+		env("e1", "A", base.Add(1*time.Millisecond)),
+		env("e3", "B", base.Add(3*time.Millisecond)),
 	}))
 
 	got, err := s.repo.ListUnpublished(ctx, 10)
@@ -60,8 +60,8 @@ func (s *EventRepositorySuite) TestSaveThenListUnpublishedOrdersBySeq() {
 	s.Equal("Created", got[0].Event.Type)
 	s.Equal([]byte(`{"k":"v"}`), got[0].Event.Data)
 	s.Equal("corr-e1", got[0].Metadata[ember.MetadataKey("correlation_id")])
-	// Timestamp reconstructs from seq (nanos).
-	s.Equal(base.Add(1*time.Nanosecond).UnixNano(), got[0].Timestamp.UnixNano())
+	// Timestamp reconstructs from created_at (ms precision).
+	s.True(got[0].Timestamp.Equal(base.Add(1 * time.Millisecond)))
 }
 
 func (s *EventRepositorySuite) TestListUnpublishedRespectsLimit() {
