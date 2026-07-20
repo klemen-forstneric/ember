@@ -142,9 +142,9 @@ func (n *Notifier) tick(ctx context.Context) {
 	}
 }
 
-// Run drives the relay until ctx is cancelled: tick, then sleep a jittered idle
-// interval. The jitter staggers replicas so their poll phases spread out,
-// giving effective pickup latency well below the idle interval.
+// Run drives the relay until ctx is cancelled or Close is called: tick, then
+// sleep a jittered idle interval. The jitter staggers replicas so their poll
+// phases spread out, giving effective pickup latency well below the idle interval.
 func (n *Notifier) Run(ctx context.Context) {
 	for {
 		select {
