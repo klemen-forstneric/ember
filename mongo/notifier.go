@@ -134,7 +134,7 @@ func (n *Notifier) tick(ctx context.Context) {
 			return
 		}
 		if published < n.cfg.BatchSize {
-			return // batch not fully drained (empty, short, or a failure) — wait for next tick
+			return // less than a full batch published: drained, or a failure to retry next tick
 		}
 	}
 }
