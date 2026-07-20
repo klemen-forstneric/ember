@@ -96,3 +96,51 @@ func (s *NotifierSuite) TestPublishBatchPerEntityHeadOfLine() {
 func (s *NotifierSuite) TestNotifyIsNoOp() {
 	s.NotPanics(func() { s.n.Notify(context.Background(), []ember.EventEnvelope{evt("e1", "A")}) })
 }
+
+func (s *NotifierSuite) TestTickNotLeaderDoesNothing() {
+	// nil lock → someone else is leader this round.
+	s.locker.On("TryLock", mock.Anything, "outbox:test", time.Minute).Return(nil, nil).Once()
+
+	s.n.tick(context.Background())
+
+	s.store.AssertNotCalled(s.T(), "ListUnpublished", mock.Anything, mock.Anything)
+	s.locker.AssertExpectations(s.T())
+}
+
+func (s *NotifierSuite) TestTickDrainsWhileFullBatch() {
+	lock := &mockLock{}
+	s.locker.On("TryLock", mock.Anything, "outbox:test", time.Minute).Return(lock, nil).Once()
+	lock.On("Release", mock.Anything).Return(nil).Once()
+
+	// cfg.BatchSize is 10. First batch: 10 events (all published) → drain again.
+	// Second batch: empty → stop.
+	full := make([]ember.EventEnvelope, 10)
+	for i := range full {
+		full[i] = evt("full", "A")
+	}
+	s.store.On("ListUnpublished", mock.Anything, 10).Return(full, nil).Once()
+	s.store.On("ListUnpublished", mock.Anything, 10).Return([]ember.EventEnvelope{}, nil).Once()
+	s.transport.On("Publish", mock.Anything, mock.Anything).Return(nil)
+	s.store.On("MarkPublished", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	s.n.tick(context.Background())
+
+	s.store.AssertNumberOfCalls(s.T(), "ListUnpublished", 2)
+	lock.AssertExpectations(s.T())
+}
+
+func (s *NotifierSuite) TestRunStopsOnContextCancel() {
+	// Always not-leader so ticks are cheap; Run must still exit on cancel.
+	s.locker.On("TryLock", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { s.n.Run(ctx); close(done) }()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		s.FailNow("Run did not return after context cancel")
+	}
+}

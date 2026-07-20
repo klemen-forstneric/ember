@@ -2,6 +2,7 @@ package mongo
 
 import (
 	"context"
+	"math/rand/v2"
 	"time"
 
 	"github.com/klemen-forstneric/ember"
@@ -96,3 +97,62 @@ func (n *Notifier) publishBatch(ctx context.Context) (int, error) {
 	}
 	return len(published), nil
 }
+
+// tick acquires the efficiency lock and, if it wins, drains the backlog: it
+// keeps publishing batches back-to-back as long as a full batch was published
+// (more likely pending), then returns. If the lock is held elsewhere, the round
+// is a no-op — only the winner touches mongo.
+func (n *Notifier) tick(ctx context.Context) {
+	lock, err := n.locker.TryLock(ctx, n.cfg.LockKey, n.cfg.LockTTL)
+	if err != nil {
+		n.logger.Error(ctx, "outbox lock error", err, "key", n.cfg.LockKey)
+		return
+	}
+	if lock == nil {
+		return // not leader this round
+	}
+	defer func() {
+		if err := lock.Release(context.WithoutCancel(ctx)); err != nil {
+			n.logger.Warn(ctx, "outbox lock release failed", "key", n.cfg.LockKey, "error", err)
+		}
+	}()
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		published, err := n.publishBatch(ctx)
+		if err != nil {
+			n.logger.Error(ctx, "outbox batch error", err)
+			return
+		}
+		if published < n.cfg.BatchSize {
+			return // batch not fully drained (empty, short, or a failure) — wait for next tick
+		}
+	}
+}
+
+// Run drives the relay until ctx is cancelled: tick, then sleep a jittered idle
+// interval. The jitter staggers replicas so their poll phases spread out,
+// giving effective pickup latency well below the idle interval.
+func (n *Notifier) Run(ctx context.Context) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		n.tick(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(n.interval()):
+		}
+	}
+}
+
+func (n *Notifier) interval() time.Duration {
+	return n.cfg.IdleInterval + time.Duration(rand.Int64N(int64(n.cfg.IdleInterval)))
+}
+
+// Close is reserved for symmetry with other transports; the relay holds no
+// resources between ticks, so shutdown is via cancelling Run's context.
+func (n *Notifier) Close() error { return nil }
