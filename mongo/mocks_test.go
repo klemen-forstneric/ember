@@ -45,3 +45,23 @@ func (m *mockLocker) TryLock(ctx context.Context, key string, ttl time.Duration)
 type mockLock struct{ mock.Mock }
 
 func (m *mockLock) Release(ctx context.Context) error { return m.Called(ctx).Error(0) }
+
+// mockLogger records level+msg for each call so tests can assert on logging
+// behavior without pinning down every variadic kv.
+type mockLogger struct{ mock.Mock }
+
+func (m *mockLogger) Debug(ctx context.Context, msg string, kvs ...interface{}) {
+	m.Called(msg)
+}
+
+func (m *mockLogger) Info(ctx context.Context, msg string, kvs ...interface{}) {
+	m.Called(msg)
+}
+
+func (m *mockLogger) Warn(ctx context.Context, msg string, kvs ...interface{}) {
+	m.Called(msg)
+}
+
+func (m *mockLogger) Error(ctx context.Context, msg string, err error, kvs ...interface{}) {
+	m.Called(msg, err)
+}

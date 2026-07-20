@@ -2,6 +2,7 @@ package mongo
 
 import (
 	"context"
+	"encoding/json"
 	"math/rand/v2"
 	"time"
 
@@ -82,11 +83,17 @@ func (n *Notifier) publishBatch(ctx context.Context) (int, error) {
 		}
 		if err := n.transport.Publish(ctx, []ember.EventEnvelope{e}); err != nil {
 			failed[e.EntityID] = true
-			n.logger.Error(ctx, "outbox publish failed", err,
-				"event_id", e.ID, "entity_id", e.EntityID, "type", e.Event.Type)
+			n.logger.Warn(ctx, "Failed to publish event, will retry",
+				"error", err, "eventId", e.ID, "type", e.Event.Type, "entity_id", e.EntityID)
 			continue
 		}
 		published = append(published, e.ID)
+
+		elapsed := time.Since(e.Timestamp)
+		n.logger.Info(ctx, "Published event", "eventId", e.ID, "type", e.Event.Type,
+			"entity_id", e.EntityID, "payload", json.RawMessage(e.Event.Data),
+			"metadata", e.Metadata, "timestamp", e.Timestamp,
+			"elapsed_ms", elapsed.Milliseconds())
 	}
 
 	if len(published) > 0 {

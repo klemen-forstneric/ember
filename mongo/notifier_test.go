@@ -93,6 +93,30 @@ func (s *NotifierSuite) TestPublishBatchPerEntityHeadOfLine() {
 	s.store.AssertExpectations(s.T())
 }
 
+func (s *NotifierSuite) TestPublishBatchLogsPublishedAndRetry() {
+	batch := []ember.EventEnvelope{evt("e1", "A"), evt("e2", "B")}
+	s.store.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
+
+	s.transport.On("Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
+		return e[0].ID == "e1"
+	})).Return(nil)
+	s.transport.On("Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
+		return e[0].ID == "e2"
+	})).Return(errors.New("transport down"))
+	s.store.On("MarkPublished", mock.Anything, []string{"e1"}, mock.Anything).Return(nil).Once()
+
+	logger := &mockLogger{}
+	logger.On("Info", "Published event").Once()
+	logger.On("Warn", "Failed to publish event, will retry").Once()
+	s.n = NewNotifier(s.store, s.transport, s.locker, logger, testConfig())
+
+	published, err := s.n.publishBatch(context.Background())
+
+	s.Require().NoError(err)
+	s.Equal(1, published)
+	logger.AssertExpectations(s.T())
+}
+
 func (s *NotifierSuite) TestNotifyIsNoOp() {
 	s.NotPanics(func() { s.n.Notify(context.Background(), []ember.EventEnvelope{evt("e1", "A")}) })
 }
