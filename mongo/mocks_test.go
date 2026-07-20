@@ -10,9 +10,9 @@ import (
 	"github.com/klemen-forstneric/ember/middleware"
 )
 
-type mockStore struct{ mock.Mock }
+type mockEventRepository struct{ mock.Mock }
 
-func (m *mockStore) ListUnpublished(ctx context.Context, limit int) ([]ember.EventEnvelope, error) {
+func (m *mockEventRepository) ListUnpublished(ctx context.Context, limit int) ([]ember.EventEnvelope, error) {
 	args := m.Called(ctx, limit)
 	var envs []ember.EventEnvelope
 	if v := args.Get(0); v != nil {
@@ -21,7 +21,7 @@ func (m *mockStore) ListUnpublished(ctx context.Context, limit int) ([]ember.Eve
 	return envs, args.Error(1)
 }
 
-func (m *mockStore) MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error {
+func (m *mockEventRepository) MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error {
 	return m.Called(ctx, ids, expiresAt).Error(0)
 }
 
