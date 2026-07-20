@@ -12,6 +12,16 @@ import (
 	"github.com/klemen-forstneric/ember/middleware"
 )
 
+// releaseScript deletes the key only if it still holds our token, so a holder
+// whose lock already expired (and was re-acquired by someone else) cannot
+// delete the new holder's lock.
+var releaseScript = redis.NewScript(`
+if redis.call("get", KEYS[1]) == ARGV[1] then
+	return redis.call("del", KEYS[1])
+end
+return 0
+`)
+
 // Locker
 type Locker struct {
 	client redis.Cmdable
@@ -36,13 +46,13 @@ func (l *Locker) TryLock(ctx context.Context, key string, ttl time.Duration) (mi
 	previous, err := l.client.SetArgs(ctx, key, current, args).Result()
 
 	if errors.Is(err, redis.Nil) {
-		return &lock{client: l.client, key: key}, nil
+		return &lock{client: l.client, key: key, token: current}, nil
 	} else if err != nil {
 		return nil, err
 	}
 
 	if previous == current {
-		return &lock{client: l.client, key: key}, nil
+		return &lock{client: l.client, key: key, token: current}, nil
 	}
 
 	return nil, nil
@@ -60,8 +70,9 @@ func (l *Locker) token() (string, error) {
 type lock struct {
 	client redis.Cmdable
 	key    string
+	token  string
 }
 
 func (l *lock) Release(ctx context.Context) error {
-	return l.client.Del(ctx, l.key).Err()
+	return releaseScript.Run(ctx, l.client, []string{l.key}, l.token).Err()
 }
