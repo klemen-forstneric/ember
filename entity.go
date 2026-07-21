@@ -18,19 +18,24 @@ type Entity interface {
 	SetVersion(Version)
 }
 
+// root
+type root struct {
+	ID      string  `json:"id"`
+	Version Version `json:"version"`
+}
+
 // EntityRoot
 type EntityRoot struct {
-	id      string
-	version Version
+	root
 }
 
 func NewEntityRoot(id string) EntityRoot {
-	return EntityRoot{id: id, version: NewVersion(0)}
+	return EntityRoot{root{ID: id, Version: NewVersion(0)}}
 }
 
-func (r *EntityRoot) ID() string           { return r.id }
-func (r *EntityRoot) Version() Version     { return r.version }
-func (r *EntityRoot) SetVersion(v Version) { r.version = v }
+func (r *EntityRoot) ID() string           { return r.root.ID }
+func (r *EntityRoot) Version() Version     { return r.root.Version }
+func (r *EntityRoot) SetVersion(v Version) { r.root.Version = v }
 
 // MarshaledEntity
 type MarshaledEntity struct {
