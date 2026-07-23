@@ -34,5 +34,8 @@ func revision(data []byte) int {
 		Revision int `json:"revision"`
 	}
 	_ = json.Unmarshal(data, &probe)
+	if probe.Revision < 0 { // corrupt/garbage revision -> baseline
+		return 0
+	}
 	return probe.Revision
 }
