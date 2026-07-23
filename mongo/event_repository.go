@@ -22,7 +22,7 @@ func NewEventRepository(c *mongo.Collection) *EventRepository {
 	return &EventRepository{collection: c}
 }
 
-type outboxDoc struct {
+type entry struct {
 	ID          string         `bson:"_id"`
 	EntityID    string         `bson:"entity_id"`
 	Type        string         `bson:"type"`
@@ -39,9 +39,10 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 	if len(envelopes) == 0 {
 		return nil
 	}
-	docs := make([]interface{}, len(envelopes))
-	for i, e := range envelopes {
-		docs[i] = outboxDoc{
+
+	ds := make([]entry, 0, len(envelopes))
+	for _, e := range envelopes {
+		ds = append(ds, entry{
 			ID:        e.ID,
 			EntityID:  e.EntityID,
 			Type:      e.Event.Type,
@@ -50,9 +51,9 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 			Seq:       e.Timestamp.UnixNano(),
 			CreatedAt: e.Timestamp,
 			Published: false,
-		}
+		})
 	}
-	_, err := r.collection.InsertMany(ctx, docs)
+	_, err := r.collection.InsertMany(ctx, ds)
 	return err
 }
 
@@ -69,7 +70,7 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]emb
 
 	var out []ember.EventEnvelope
 	for cur.Next(ctx) {
-		var d outboxDoc
+		var d entry
 		if err := cur.Decode(&d); err != nil {
 			return nil, err
 		}
