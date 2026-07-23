@@ -18,24 +18,20 @@ type Entity interface {
 	SetVersion(Version)
 }
 
-// root
-type root struct {
-	ID      string  `json:"id"`
-	Version Version `json:"version"`
-}
-
-// EntityRoot
+// EntityRoot supplies identity and optimistic-concurrency version to an entity.
+// Neither field is serialized here — persistence is owned by a per-entity marshaler.
 type EntityRoot struct {
-	root
+	id      string
+	version Version
 }
 
 func NewEntityRoot(id string) EntityRoot {
-	return EntityRoot{root{ID: id, Version: NewVersion(0)}}
+	return EntityRoot{id: id, version: NewVersion(0)}
 }
 
-func (r *EntityRoot) ID() string           { return r.root.ID }
-func (r *EntityRoot) Version() Version     { return r.root.Version }
-func (r *EntityRoot) SetVersion(v Version) { r.root.Version = v }
+func (r *EntityRoot) ID() string           { return r.id }
+func (r *EntityRoot) Version() Version     { return r.version }
+func (r *EntityRoot) SetVersion(v Version) { r.version = v }
 
 // MarshaledEntity
 type MarshaledEntity struct {

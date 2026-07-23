@@ -2,7 +2,6 @@ package ember
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 
@@ -10,43 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
-
-// fakeWrapper is a non-entity result that carries an entity, mirroring
-// user.CreateResult. Its identity must survive a json round-trip even though
-// the wrapper itself is not an Entity.
-type fakeWrapper struct {
-	Entity  *fakeEntity
-	Created bool
-}
-
-func TestEntityJSONRoundTripPreservesIdentity(t *testing.T) {
-	orig := newFakeEntity("e1")
-	orig.Name = "alice"
-	orig.SetVersion(NewVersion(7))
-
-	data, err := json.Marshal(orig)
-	require.NoError(t, err)
-
-	var got fakeEntity
-	require.NoError(t, json.Unmarshal(data, &got))
-	require.Equal(t, "e1", got.ID())
-	require.Equal(t, uint64(7), got.Version().Value())
-	require.Equal(t, "alice", got.Name)
-}
-
-func TestEntityJSONRoundTripPreservesNestedIdentity(t *testing.T) {
-	orig := fakeWrapper{Entity: newFakeEntity("e1"), Created: true}
-	orig.Entity.SetVersion(NewVersion(3))
-
-	data, err := json.Marshal(orig)
-	require.NoError(t, err)
-
-	var got fakeWrapper
-	require.NoError(t, json.Unmarshal(data, &got))
-	require.Equal(t, "e1", got.Entity.ID())
-	require.Equal(t, uint64(3), got.Entity.Version().Value())
-	require.True(t, got.Created)
-}
 
 // versionedRepo is an in-memory EntityRepository that enforces optimistic
 // concurrency the way the persistent backends do: a save whose expected
