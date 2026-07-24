@@ -92,3 +92,17 @@ func (m *mockEventMarshaler) Unmarshal(ctx context.Context, e *MarshaledEvent) (
 type stubIDer struct{ id string }
 
 func (s stubIDer) ID() string { return s.id }
+
+// mockTransactor runs the callback (as a real transaction boundary does) and
+// returns the handler's error, else the configured transaction-level error.
+type mockTransactor struct {
+	mock.Mock
+}
+
+func (m *mockTransactor) WithinTx(ctx context.Context, fn func(context.Context) error) error {
+	args := m.Called(ctx)
+	if err := fn(ctx); err != nil {
+		return err
+	}
+	return args.Error(0)
+}
