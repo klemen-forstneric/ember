@@ -16,22 +16,27 @@ type Entity interface {
 	Type() string
 	Version() Version
 	SetVersion(Version)
+	events() *Events // unexported: only ember-rooted types satisfy Entity
 }
 
-// EntityRoot supplies identity and optimistic-concurrency version to an entity.
-// Neither field is serialized here — persistence is owned by a per-entity marshaler.
+// EntityRoot supplies identity, optimistic-concurrency version, and a domain-
+// event buffer to an entity. None of these are serialized here — persistence is
+// owned by a per-entity marshaler.
 type EntityRoot struct {
-	id      string
-	version Version
+	i string
+	v Version
+	e Events
 }
 
 func NewEntityRoot(id string) EntityRoot {
-	return EntityRoot{id: id, version: NewVersion(0)}
+	return EntityRoot{i: id, v: NewVersion(0)}
 }
 
-func (r *EntityRoot) ID() string           { return r.id }
-func (r *EntityRoot) Version() Version     { return r.version }
-func (r *EntityRoot) SetVersion(v Version) { r.version = v }
+func (r *EntityRoot) ID() string           { return r.i }
+func (r *EntityRoot) Version() Version     { return r.v }
+func (r *EntityRoot) SetVersion(v Version) { r.v = v }
+func (r *EntityRoot) Emit(events ...Event) { r.e.Emit(events...) }
+func (r *EntityRoot) events() *Events      { return &r.e }
 
 // MarshaledEntity
 type MarshaledEntity struct {
