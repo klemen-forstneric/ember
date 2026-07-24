@@ -19,10 +19,9 @@ func Migrate(data []byte, ms []Migration) ([]byte, error) {
 		return nil, fmt.Errorf("ember: negative revision %d", rev)
 	}
 	if rev > len(ms) {
-		// Data carries a higher revision than the code has migrations for —
-		// code rolled back behind the data.
 		return nil, fmt.Errorf("ember: stored revision %d ahead of code (%d migrations)", rev, len(ms))
 	}
+
 	for i := rev; i < len(ms); i++ {
 		if data, err = ms[i](data); err != nil {
 			return nil, fmt.Errorf("ember: migration %d->%d: %w", i, i+1, err)
