@@ -37,7 +37,7 @@ func (s *TransactorSuite) TestWithinTxJoinsExistingSession() {
 	called := false
 	err = s.tx.WithinTx(sctx, func(ctx context.Context) error {
 		called = true
-		s.NotNil(mongo.SessionFromContext(ctx), "fn must receive a session-bound ctx")
+		s.Equal(sess.ID(), mongo.SessionFromContext(ctx).ID(), "fn must receive the same session")
 		return nil
 	})
 

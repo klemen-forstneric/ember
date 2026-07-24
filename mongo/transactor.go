@@ -3,6 +3,7 @@ package mongo
 import (
 	"context"
 
+	"github.com/klemen-forstneric/ember"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
@@ -17,6 +18,8 @@ type Transactor struct {
 func NewTransactor(client *mongo.Client) *Transactor {
 	return &Transactor{client: client}
 }
+
+var _ ember.Transactor = (*Transactor)(nil)
 
 func (t *Transactor) WithinTx(ctx context.Context, fn func(context.Context) error) error {
 	if mongo.SessionFromContext(ctx) != nil {

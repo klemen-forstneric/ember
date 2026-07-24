@@ -54,8 +54,7 @@ type ReceivedEvent struct {
 	Timestamp time.Time
 }
 
-// envelopeBuilder turns domain events into stamped envelopes. Shared by
-// EventStore (persist) and Publisher (immediate delivery).
+// envelopeBuilder stamps events into envelopes; shared by EventStore and Publisher.
 type envelopeBuilder struct {
 	ider      IDer
 	metadata  MetadataGetter
@@ -85,9 +84,7 @@ func (b envelopeBuilder) build(ctx context.Context, events ...Event) ([]EventEnv
 	return envelopes, nil
 }
 
-// EventStore is to events what EntityStore is to entities: it builds the envelope
-// and persists it to the EventRepository. It never delivers — the outbox relay
-// polls and delivers post-commit.
+// EventStore persists event envelopes to the repository; it never delivers.
 type EventStore struct {
 	builder    envelopeBuilder
 	repository EventRepository

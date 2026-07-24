@@ -24,6 +24,7 @@ func (s *Store[E]) List(ctx context.Context, f Filter, sort Sort) ([]E, error) {
 }
 
 func (s *Store[E]) Save(ctx context.Context, e E) error {
+	version := e.Version() // restore point: the DB rolls back on failure but the in-memory version bump does not
 	err := s.tx.WithinTx(ctx, func(ctx context.Context) error {
 		if err := s.entities.save(ctx, e); err != nil {
 			return err
@@ -35,6 +36,7 @@ func (s *Store[E]) Save(ctx context.Context, e E) error {
 		return s.events.Save(ctx, evs...)
 	})
 	if err != nil {
+		e.SetVersion(version)
 		return err
 	}
 	e.events().Clear()
