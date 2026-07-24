@@ -6,9 +6,8 @@ import (
 )
 
 var (
-	ErrEntityNotFound    = errors.New("ember: entity not found")
-	ErrVersionConflict   = errors.New("ember: entity version conflict")
-	ErrUnpublishedEvents = errors.New("ember: entity has pending events; use ember.Store")
+	ErrEntityNotFound  = errors.New("ember: entity not found")
+	ErrVersionConflict = errors.New("ember: entity version conflict")
 )
 
 // Entity
@@ -58,74 +57,4 @@ type EntityRepository interface {
 	Save(ctx context.Context, m *MarshaledEntity) error
 	Get(ctx context.Context, typ, id string) (*MarshaledEntity, error)
 	List(ctx context.Context, typ string, f Filter, s Sort) ([]*MarshaledEntity, error)
-}
-
-// EntityStore
-type EntityStore[E Entity] struct {
-	repository EntityRepository
-	marshaler  EntityMarshaler[E]
-}
-
-func NewEntityStore[E Entity](r EntityRepository, m EntityMarshaler[E]) *EntityStore[E] {
-	return &EntityStore[E]{repository: r, marshaler: m}
-}
-
-func (s *EntityStore[E]) Get(ctx context.Context, id string) (E, error) {
-	var empty E
-	m, err := s.repository.Get(ctx, empty.Type(), id)
-	if err != nil {
-		return empty, err
-	}
-
-	return s.marshaler.Unmarshal(ctx, m)
-}
-
-func (s *EntityStore[E]) List(ctx context.Context, f Filter, sort Sort) ([]E, error) {
-	var empty E
-	ms, err := s.repository.List(ctx, empty.Type(), f, sort)
-	if err != nil {
-		return nil, err
-	}
-
-	out := make([]E, 0, len(ms))
-	for _, m := range ms {
-		e, err := s.marshaler.Unmarshal(ctx, m)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-
-	return out, nil
-}
-
-// Save persists an entity snapshot. A snapshot-only store must not silently drop
-// domain events: an entity with pending events must be saved through ember.Store.
-func (s *EntityStore[E]) Save(ctx context.Context, e E) error {
-	if len(e.events().All()) > 0 {
-		return ErrUnpublishedEvents
-	}
-	return s.save(ctx, e)
-}
-
-func (s *EntityStore[E]) save(ctx context.Context, e E) error {
-	next := e.Version().Inc()
-	e.SetVersion(next)
-
-	m, err := s.marshaler.Marshal(ctx, e)
-	if err != nil {
-		return err
-	}
-
-	if err := s.repository.Save(ctx, m); err != nil {
-		return err
-	}
-
-	// Collapse the version so a subsequent Save of the same in-memory entity
-	// filters on the just-persisted version rather than the original Initial().
-	// Without this, repeated saves of one instance (e.g. a streamed message
-	// persisted across create -> partial flushes -> complete) self-conflict,
-	// because Version.Inc keeps the original Initial() across increments.
-	e.SetVersion(NewVersion(next.Value()))
-	return nil
 }
