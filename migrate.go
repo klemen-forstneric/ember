@@ -16,14 +16,17 @@ var ErrRevisionAhead = errors.New("ember: stored revision ahead of code")
 // Migrate applies ms[stored:] to data, where stored is the revision encoded in
 // data (absent -> 0). Migrations run on raw bytes before any struct decode.
 func Migrate(data []byte, ms []Migration) ([]byte, error) {
-	stored, err := revision(data)
+	rev, err := revision(data)
 	if err != nil {
 		return nil, fmt.Errorf("ember: read revision: %w", err)
 	}
-	if stored > len(ms) {
+	if rev < 0 {
+		return nil, fmt.Errorf("ember: negative revision %d", rev)
+	}
+	if rev > len(ms) {
 		return nil, ErrRevisionAhead
 	}
-	for i := stored; i < len(ms); i++ {
+	for i := rev; i < len(ms); i++ {
 		if data, err = ms[i](data); err != nil {
 			return nil, fmt.Errorf("ember: migration %d->%d: %w", i, i+1, err)
 		}
@@ -32,14 +35,12 @@ func Migrate(data []byte, ms []Migration) ([]byte, error) {
 }
 
 func revision(data []byte) (int, error) {
-	var probe struct {
+	var pl struct {
 		Revision int `json:"revision"`
 	}
-	if err := json.Unmarshal(data, &probe); err != nil {
+
+	if err := json.Unmarshal(data, &pl); err != nil {
 		return 0, err
 	}
-	if probe.Revision < 0 { // corrupt/garbage revision -> baseline
-		return 0, nil
-	}
-	return probe.Revision, nil
+	return pl.Revision, nil
 }

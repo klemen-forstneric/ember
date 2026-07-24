@@ -73,11 +73,8 @@ func TestMigrateNoMigrations(t *testing.T) {
 	require.Equal(t, in, got)
 }
 
-func TestMigrateNegativeRevisionTreatedAsBaseline(t *testing.T) {
-	got, err := Migrate([]byte(`{"revision":-1}`), []Migration{addField("a", "1")})
-	require.NoError(t, err)
-
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(got, &m))
-	require.Equal(t, "1", m["a"])
+func TestMigrateNegativeRevisionErrors(t *testing.T) {
+	_, err := Migrate([]byte(`{"revision":-1}`), []Migration{addField("a", "1")})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "negative revision")
 }
