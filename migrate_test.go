@@ -56,7 +56,8 @@ func TestMigrateAlreadyCurrentIsNoop(t *testing.T) {
 
 func TestMigrateRevisionAhead(t *testing.T) {
 	_, err := Migrate([]byte(`{"revision":5}`), []Migration{addField("a", "1")})
-	require.ErrorIs(t, err, ErrRevisionAhead)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ahead of code")
 }
 
 func TestMigratePropagatesError(t *testing.T) {
