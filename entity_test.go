@@ -18,6 +18,15 @@ func newFakeEntity(id string) *fakeEntity {
 
 func (e *fakeEntity) Type() string { return "fake" }
 
+// fakeEntity2 is a second entity type, for cross-type saver tests.
+type fakeEntity2 struct {
+	EntityRoot
+	Name string
+}
+
+func newFakeEntity2(id string) *fakeEntity2 { return &fakeEntity2{EntityRoot: NewEntityRoot(id)} }
+func (e *fakeEntity2) Type() string         { return "fake2" }
+
 func TestEntityRootEmitBuffersEvents(t *testing.T) {
 	e := newFakeEntity("1")
 	evt := fakeEvent{entityID: "1", typ: "Created"}
