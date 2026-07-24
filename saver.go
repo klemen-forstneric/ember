@@ -26,6 +26,10 @@ func NewEntitySaver(ev *EventStore, tx Transactor, bindings ...binder) *EntitySa
 }
 
 func (s *EntitySaver) Save(ctx context.Context, entities ...Entity) error {
+	if len(entities) == 0 {
+		return nil
+	}
+
 	var events []Event
 	for _, e := range entities {
 		events = append(events, e.events().All()...)

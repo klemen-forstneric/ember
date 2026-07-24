@@ -66,3 +66,14 @@ func (s *EntityLoaderSuite) TestListError() {
 
 	s.ErrorIs(err, sentinel)
 }
+
+func (s *EntityLoaderSuite) TestListUnmarshalError() {
+	m1 := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(3), Data: []byte("alice")}
+	s.repo.On("List", mock.Anything, "fake", mock.Anything, mock.Anything).Return([]*MarshaledEntity{m1}, nil)
+	s.marshaler.On("Unmarshal", mock.Anything, m1).Return(nil, errors.New("unmarshal boom"))
+
+	got, err := s.loader.List(s.ctx, nil, Sort{})
+
+	s.Require().Error(err)
+	s.Nil(got)
+}

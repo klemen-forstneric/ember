@@ -50,6 +50,20 @@ func (s *EntityStoreSuite) TestGetDelegatesToLoader() {
 	s.Equal(e, got)
 }
 
+func (s *EntityStoreSuite) TestListDelegatesToLoader() {
+	m1 := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(3), Data: []byte("alice")}
+	e1 := newFakeEntity("1")
+	e1.Name = "alice"
+	f := Eq("name", "alice")
+	s.repo.On("List", mock.Anything, "fake", f, Sort{}).Return([]*MarshaledEntity{m1}, nil)
+	s.marshaler.On("Unmarshal", mock.Anything, m1).Return(e1, nil)
+
+	got, err := s.store.List(s.ctx, f, Sort{})
+
+	s.Require().NoError(err)
+	s.Equal([]*fakeEntity{e1}, got)
+}
+
 func (s *EntityStoreSuite) TestSaveDelegatesToSaver() {
 	e := newFakeEntity("1")
 	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}

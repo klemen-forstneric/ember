@@ -41,6 +41,13 @@ func (s *EntitySaverSuite) TearDownTest() {
 	s.tx.AssertExpectations(s.T())
 }
 
+func (s *EntitySaverSuite) TestSaveNoEntitiesIsNoop() {
+	// no expectations set anywhere; TearDownTest catches any unexpected call.
+	err := s.saver.Save(s.ctx)
+
+	s.Require().NoError(err)
+}
+
 func (s *EntitySaverSuite) TestSaveSingleNoEventsSkipsTx() {
 	e := newFakeEntity("1")
 	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
@@ -120,7 +127,6 @@ func (s *EntitySaverSuite) TestSaveCommitErrorLeavesEntityUntouched() {
 	s.tx.On("WithinTx", mock.Anything).Return(commitErr).Once()
 	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
 	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
-	s.eventMarsh.On("Marshal", mock.Anything, mev).Return(mev, nil).Maybe()
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).Return(mev, nil)
 	s.eventRepo.On("Save", mock.Anything, mock.Anything).Return(nil)
 
