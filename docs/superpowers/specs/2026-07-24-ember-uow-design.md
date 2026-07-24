@@ -329,8 +329,10 @@ Key properties:
 
 ### 8. `EntityStore[E]` — single-type convenience
 
-Pairs a typed loader with the shared saver, restoring the familiar
-`Get`/`List`/`Save` surface for the common single-type case.
+Self-contained: pairs a typed loader with an internal single-type saver it builds
+itself, restoring the familiar `Get`/`List`/`Save` surface for the common case.
+No `Bind` ceremony at the call site — pass repo + marshaler directly, plus the
+shared `EventStore`/`Transactor` infra.
 
 ```go
 type EntityStore[E Entity] struct {
@@ -338,8 +340,9 @@ type EntityStore[E Entity] struct {
     saver  *EntitySaver
 }
 
-func NewEntityStore[E Entity](b Binding[E], saver *EntitySaver) *EntityStore[E] {
-    return &EntityStore[E]{loader: NewEntityLoader(b), saver: saver}
+func NewEntityStore[E Entity](r EntityRepository, m EntityMarshaler[E], ev *EventStore, tx Transactor) *EntityStore[E] {
+    b := Bind[E](r, m)
+    return &EntityStore[E]{loader: NewEntityLoader(b), saver: NewEntitySaver(ev, tx, b)}
 }
 
 func (s *EntityStore[E]) Get(ctx context.Context, id string) (E, error)          { return s.loader.Get(ctx, id) }
@@ -347,23 +350,29 @@ func (s *EntityStore[E]) List(ctx context.Context, f Filter, srt Sort) ([]E, err
 func (s *EntityStore[E]) Save(ctx context.Context, e E) error                    { return s.saver.Save(ctx, e) }
 ```
 
-The binding passed here must also have been given to `saver` (so it holds that
-type's `binding`); otherwise `Save` returns `ErrUnregisteredEntity`.
+The store's internal saver knows only `E`. The public `EntitySaver` (§7) is the
+separate tool for cross-type atomic saves. A type used both ways (its own store +
+a shared saver) is wired in both places — rare, and cross-type is the exception.
 
 ## Wiring
 
 ```go
-orderB  := ember.Bind[*Order](orderRepo, orderMarshaler)
-walletB := ember.Bind[*Wallet](walletRepo, walletMarshaler)
-
-saver  := ember.NewEntitySaver(eventStore, tx, orderB, walletB)
-orders := ember.NewEntityStore(orderB, saver)   // Get/List/Save for *Order
-wallets := ember.NewEntityStore(walletB, saver)
-// reads-only alternative: ol := ember.NewEntityLoader(orderB)
+// common single-type case — self-contained store, no Bind ceremony
+orders  := ember.NewEntityStore[*Order](orderRepo, orderMarshaler, eventStore, tx)
+wallets := ember.NewEntityStore[*Wallet](walletRepo, walletMarshaler, eventStore, tx)
 
 orders.Get(ctx, id)
-orders.Save(ctx, order)          // → saver.Save(ctx, order)
-saver.Save(ctx, order, wallet)   // cross-type atomic
+orders.Save(ctx, order)          // persists order + its events atomically
+
+// cross-type atomic — explicit shared saver built from bindings
+saver := ember.NewEntitySaver(eventStore, tx,
+    ember.Bind[*Order](orderRepo, orderMarshaler),
+    ember.Bind[*Wallet](walletRepo, walletMarshaler),
+)
+saver.Save(ctx, order, wallet)
+
+// reads-only alternative
+ol := ember.NewEntityLoader(ember.Bind[*Order](orderRepo, orderMarshaler))
 ```
 
 ## Data flow

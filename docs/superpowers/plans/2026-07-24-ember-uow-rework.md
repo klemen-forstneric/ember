@@ -597,11 +597,13 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - Test: `store_test.go` (fresh)
 
 **Interfaces:**
-- Consumes: `EntityLoader[E]`/`NewEntityLoader` (R1), `EntitySaver` (R2), `Binding[E]` (R1).
+- Consumes: `Bind`/`Binding[E]`, `EntityLoader[E]`/`NewEntityLoader` (R1), `EntitySaver`/`NewEntitySaver` (R2), `EventStore` (Task 4), `Transactor` (Task 5).
 - Produces:
   - `EntityStore[E Entity]` struct (`loader *EntityLoader[E]`, `saver *EntitySaver`).
-  - `NewEntityStore[E Entity](b Binding[E], saver *EntitySaver) *EntityStore[E]`.
+  - `NewEntityStore[E Entity](r EntityRepository, m EntityMarshaler[E], ev *EventStore, tx Transactor) *EntityStore[E]` — builds the binding, loader, and a single-type internal saver.
   - `Get(ctx, id) (E, error)`, `List(ctx, Filter, Sort) ([]E, error)`, `Save(ctx, e E) error`.
+
+The store is self-contained: it constructs its own internal `EntitySaver` from `(ev, tx, Bind[E](r, m))`. The public `EntitySaver` (R2) remains for cross-type atomic saves.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -638,10 +640,8 @@ func (s *EntityStoreSuite) SetupTest() {
 	s.eventRepo = &mockEventRepository{}
 	s.eventMarsh = &mockEventMarshaler{}
 	s.tx = &mockTransactor{}
-	b := Bind[*fakeEntity](s.repo, s.marshaler)
 	events := NewEventStore(stubIDer{id: "evt-1"}, s.eventRepo, NoopMetadataGetter{}, s.eventMarsh)
-	saver := NewEntitySaver(events, s.tx, b)
-	s.store = NewEntityStore(b, saver)
+	s.store = NewEntityStore[*fakeEntity](s.repo, s.marshaler, events, s.tx)
 }
 
 func (s *EntityStoreSuite) TearDownTest() {
@@ -688,15 +688,16 @@ package ember
 
 import "context"
 
-// EntityStore is a single-type convenience pairing typed reads (EntityLoader)
-// with the shared EntitySaver.
+// EntityStore is a self-contained single-type convenience: typed reads plus an
+// internal saver that persists the entity and its events atomically.
 type EntityStore[E Entity] struct {
 	loader *EntityLoader[E]
 	saver  *EntitySaver
 }
 
-func NewEntityStore[E Entity](b Binding[E], saver *EntitySaver) *EntityStore[E] {
-	return &EntityStore[E]{loader: NewEntityLoader(b), saver: saver}
+func NewEntityStore[E Entity](r EntityRepository, m EntityMarshaler[E], ev *EventStore, tx Transactor) *EntityStore[E] {
+	b := Bind[E](r, m)
+	return &EntityStore[E]{loader: NewEntityLoader(b), saver: NewEntitySaver(ev, tx, b)}
 }
 
 func (s *EntityStore[E]) Get(ctx context.Context, id string) (E, error) {
