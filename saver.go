@@ -6,10 +6,11 @@ import (
 	"fmt"
 )
 
-var ErrUnregisteredEntity = errors.New("ember: no binding registered for entity type")
+var (
+	ErrUnregisteredEntity = errors.New("ember: no binding registered for entity type")
+)
 
-// EntitySaver persists any registered entity(ies) plus the events they produced,
-// atomically. It holds no notifier: delivery is the outbox relay's job.
+// EntitySaver
 type EntitySaver struct {
 	bindings map[string]binding
 	events   *EventStore
@@ -25,61 +26,63 @@ func NewEntitySaver(ev *EventStore, tx Transactor, bindings ...binder) *EntitySa
 	return &EntitySaver{bindings: m, events: ev, tx: tx}
 }
 
-func (s *EntitySaver) Save(ctx context.Context, entities ...Entity) error {
-	if len(entities) == 0 {
+func (s *EntitySaver) Save(ctx context.Context, es ...Entity) error {
+	if len(es) == 0 {
 		return nil
 	}
 
 	var events []Event
-	for _, e := range entities {
+	for _, e := range es {
 		events = append(events, e.events().All()...)
 	}
 
-	type pending struct {
-		entity  Entity
-		version Version
+	type entities struct {
+		e Entity
+		v Version
 	}
-	var pend []pending
 
-	work := func(ctx context.Context) error {
-		pend = pend[:0]
-		for _, e := range entities {
-			v, err := s.persist(ctx, e)
+	var saved []entities
+
+	fn := func(ctx context.Context) error {
+		saved = nil
+
+		for _, e := range es {
+			v, err := s.save(ctx, e)
 			if err != nil {
 				return err
 			}
-			pend = append(pend, pending{e, v})
+
+			saved = append(saved, entities{e: e, v: v})
 		}
-		if len(events) > 0 {
-			return s.events.Save(ctx, events...)
-		}
-		return nil
+
+		return s.events.Save(ctx, events...)
 	}
 
 	var err error
-	if len(entities) == 1 && len(events) == 0 {
-		err = work(ctx)
+	if len(es) == 1 && len(events) == 0 {
+		err = fn(ctx)
 	} else {
-		err = s.tx.WithinTx(ctx, work)
+		err = s.tx.WithinTx(ctx, fn)
 	}
+
 	if err != nil {
 		return err
 	}
 
-	for _, p := range pend {
-		p.entity.SetVersion(p.version)
-		p.entity.events().Clear()
+	for _, p := range saved {
+		p.e.SetVersion(p.v)
+		p.e.events().Clear()
 	}
+
 	return nil
 }
 
-// persist marshals the snapshot at the next version and writes it without
-// permanently mutating e; it returns the version to adopt once the write is durable.
-func (s *EntitySaver) persist(ctx context.Context, e Entity) (Version, error) {
+func (s *EntitySaver) save(ctx context.Context, e Entity) (Version, error) {
 	b, ok := s.bindings[e.Type()]
 	if !ok {
 		return Version{}, fmt.Errorf("%w: %s", ErrUnregisteredEntity, e.Type())
 	}
+
 	prev := e.Version()
 	next := prev.Inc()
 	e.SetVersion(next)

@@ -98,6 +98,10 @@ func NewEventStore(i IDer, r EventRepository, mg MetadataGetter, m EventMarshale
 }
 
 func (s *EventStore) Save(ctx context.Context, events ...Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+
 	envelopes, err := s.builder.build(ctx, events...)
 	if err != nil {
 		return err

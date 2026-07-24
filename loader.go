@@ -27,13 +27,16 @@ func (l *EntityLoader[E]) List(ctx context.Context, f Filter, sort Sort) ([]E, e
 	if err != nil {
 		return nil, err
 	}
-	out := make([]E, 0, len(ms))
+
+	es := make([]E, 0, len(ms))
 	for _, m := range ms {
 		e, err := l.marshaler.Unmarshal(ctx, m)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, e)
+
+		es = append(es, e)
 	}
-	return out, nil
+
+	return es, nil
 }
