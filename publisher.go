@@ -1,9 +1,6 @@
 package ember
 
-import (
-	"context"
-	"time"
-)
+import "context"
 
 // IDer
 type IDer interface {
@@ -12,49 +9,27 @@ type IDer interface {
 
 // Publisher
 type Publisher struct {
-	ider       IDer
+	builder    envelopeBuilder
 	repository EventRepository
-	metadata   MetadataGetter
-	marshaler  EventMarshaler
 	notifier   Notifier
 }
 
 func NewPublisher(i IDer, r EventRepository, mg MetadataGetter, m EventMarshaler, n Notifier) *Publisher {
 	return &Publisher{
-		ider:       i,
+		builder:    envelopeBuilder{ider: i, metadata: mg, marshaler: m},
 		repository: r,
-		metadata:   mg,
-		marshaler:  m,
 		notifier:   n,
 	}
 }
 
 func (p *Publisher) Publish(ctx context.Context, events ...Event) error {
-	metadata, err := p.metadata.Get(ctx)
+	envelopes, err := p.builder.build(ctx, events...)
 	if err != nil {
 		return err
 	}
-
-	envelopes := make([]EventEnvelope, 0, len(events))
-	for _, e := range events {
-		marshaled, err := p.marshaler.Marshal(ctx, e)
-		if err != nil {
-			return err
-		}
-
-		envelopes = append(envelopes, EventEnvelope{
-			ID:        p.ider.ID(),
-			EntityID:  e.EntityID(),
-			Event:     marshaled,
-			Metadata:  metadata,
-			Timestamp: time.Now().UTC(),
-		})
-	}
-
 	if err := p.repository.Save(ctx, envelopes); err != nil {
 		return err
 	}
-
 	p.notifier.Notify(ctx, envelopes)
 	return nil
 }

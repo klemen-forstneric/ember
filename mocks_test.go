@@ -55,3 +55,40 @@ func (m *mockEntityMarshaler[E]) Unmarshal(ctx context.Context, me *MarshaledEnt
 	}
 	return out, args.Error(1)
 }
+
+// mockEventRepository is a testify mock for EventRepository.
+type mockEventRepository struct {
+	mock.Mock
+}
+
+func (m *mockEventRepository) Save(ctx context.Context, envelopes []EventEnvelope) error {
+	return m.Called(ctx, envelopes).Error(0)
+}
+
+// mockEventMarshaler is a testify mock for EventMarshaler.
+type mockEventMarshaler struct {
+	mock.Mock
+}
+
+func (m *mockEventMarshaler) Marshal(ctx context.Context, e Event) (*MarshaledEvent, error) {
+	args := m.Called(ctx, e)
+	var out *MarshaledEvent
+	if v := args.Get(0); v != nil {
+		out = v.(*MarshaledEvent)
+	}
+	return out, args.Error(1)
+}
+
+func (m *mockEventMarshaler) Unmarshal(ctx context.Context, e *MarshaledEvent) (Event, error) {
+	args := m.Called(ctx, e)
+	var out Event
+	if v := args.Get(0); v != nil {
+		out = v.(Event)
+	}
+	return out, args.Error(1)
+}
+
+// stubIDer returns a fixed id (event envelope IDs are not under test here).
+type stubIDer struct{ id string }
+
+func (s stubIDer) ID() string { return s.id }
