@@ -8,6 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMigrateMalformedDataErrors(t *testing.T) {
+	_, err := Migrate([]byte(`{not json`), []Migration{addField("a", "1")})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "read revision")
+}
+
 func addField(key, val string) Migration {
 	return func(data []byte) ([]byte, error) {
 		var m map[string]any
