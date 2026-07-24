@@ -36,7 +36,7 @@ func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) e
 		return err
 	}
 
-	res, err := r.db.ExecContext(ctx, query, args...)
+	res, err := querierFrom(ctx, r.db).ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -67,7 +67,7 @@ func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.Mars
 		version uint64
 		data    []byte
 	)
-	row := r.db.QueryRowContext(ctx, query, args...)
+	row := querierFrom(ctx, r.db).QueryRowContext(ctx, query, args...)
 
 	if err := row.Scan(&version, &data); err == sql.ErrNoRows {
 		return nil, ember.ErrEntityNotFound
@@ -107,7 +107,7 @@ func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter,
 		return nil, err
 	}
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := querierFrom(ctx, r.db).QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
