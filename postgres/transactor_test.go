@@ -87,3 +87,22 @@ func TestWithinTxBeginError(t *testing.T) {
 	require.ErrorIs(t, err, boom)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestQuerierFrom(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	// no tx on ctx -> returns db
+	require.Equal(t, querier(db), querierFrom(context.Background(), db))
+
+	// tx on ctx -> returns that tx, not db
+	mock.ExpectBegin()
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	require.Equal(t, querier(tx), querierFrom(ctxWithTx(context.Background(), tx), db))
+
+	mock.ExpectRollback()
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
