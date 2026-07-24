@@ -179,3 +179,25 @@ func TestEntityRootIdentityUnchanged(t *testing.T) {
 	e.SetVersion(NewVersion(3))
 	require.Equal(t, uint64(3), e.Version().Value())
 }
+
+func (s *EntityStoreSuite) TestSaveRejectsEntityWithPendingEvents() {
+	e := newFakeEntity("1")
+	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
+
+	err := s.store.Save(s.ctx, e)
+
+	s.ErrorIs(err, ErrUnpublishedEvents)
+	// repo.Marshal / repo.Save must NOT be called — asserted by TearDownTest
+	// (no expectations set on the mocks).
+}
+
+func (s *EntityStoreSuite) TestSaveWithoutEventsPersists() {
+	e := newFakeEntity("1")
+	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
+	s.marshaler.On("Marshal", mock.Anything, e).Return(m, nil)
+	s.repo.On("Save", mock.Anything, m).Return(nil)
+
+	err := s.store.Save(s.ctx, e)
+
+	s.Require().NoError(err)
+}

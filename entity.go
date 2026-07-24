@@ -6,8 +6,9 @@ import (
 )
 
 var (
-	ErrEntityNotFound  = errors.New("ember: entity not found")
-	ErrVersionConflict = errors.New("ember: entity version conflict")
+	ErrEntityNotFound    = errors.New("ember: entity not found")
+	ErrVersionConflict   = errors.New("ember: entity version conflict")
+	ErrUnpublishedEvents = errors.New("ember: entity has pending events; use ember.Store")
 )
 
 // Entity
@@ -98,7 +99,16 @@ func (s *EntityStore[E]) List(ctx context.Context, f Filter, sort Sort) ([]E, er
 	return out, nil
 }
 
+// Save persists an entity snapshot. A snapshot-only store must not silently drop
+// domain events: an entity with pending events must be saved through ember.Store.
 func (s *EntityStore[E]) Save(ctx context.Context, e E) error {
+	if len(e.events().All()) > 0 {
+		return ErrUnpublishedEvents
+	}
+	return s.save(ctx, e)
+}
+
+func (s *EntityStore[E]) save(ctx context.Context, e E) error {
 	next := e.Version().Inc()
 	e.SetVersion(next)
 
