@@ -15,6 +15,7 @@ import (
 type LockerSuite struct {
 	suite.Suite
 	mr     *miniredis.Miniredis
+	client *goredis.Client
 	locker *emberredis.Locker
 }
 
@@ -31,6 +32,7 @@ func (s *LockerSuite) SetupTest() {
 		mr.Close()
 	})
 	s.mr = mr
+	s.client = client
 	s.locker = emberredis.NewLocker(client, time.Minute)
 }
 
@@ -70,4 +72,25 @@ func (s *LockerSuite) TestStaleReleaseDoesNotDeleteNewHolder() {
 	lockC, err := s.locker.TryLock(ctx, "k")
 	s.Require().NoError(err)
 	s.Nil(lockC, "B's lock must survive A's stale release")
+}
+
+func (s *LockerSuite) TestTTLAppliedToKey() {
+	lock, err := s.locker.TryLock(context.Background(), "k")
+	s.Require().NoError(err)
+	s.Require().NotNil(lock)
+
+	s.Equal(time.Minute, s.mr.TTL("k"))
+}
+
+func (s *LockerSuite) TestNonPositiveTTLFallsBackToDefault() {
+	for _, ttl := range []time.Duration{0, -time.Second} {
+		locker := emberredis.NewLocker(s.client, ttl)
+
+		lock, err := locker.TryLock(context.Background(), "k")
+		s.Require().NoError(err)
+		s.Require().NotNil(lock)
+		s.Equal(30*time.Second, s.mr.TTL("k"), "non-positive ttl must take the default lease")
+
+		s.Require().NoError(lock.Release(context.Background()))
+	}
 }
