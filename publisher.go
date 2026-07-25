@@ -36,8 +36,11 @@ func (p *Publisher) stage(ctx context.Context, events ...Event) (delivery, error
 // delivery runs immediately.
 func (p *Publisher) Publish(ctx context.Context, events ...Event) error {
 	d, err := p.stage(ctx, events...)
-	if err != nil || d == nil {
+	if err != nil {
 		return err
+	}
+	if d == nil {
+		return nil
 	}
 	return d(ctx)
 }
