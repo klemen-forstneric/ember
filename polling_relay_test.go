@@ -25,7 +25,6 @@ func testRelayConfig() PollingRelayConfig {
 		IdleInterval: time.Millisecond,
 		BatchSize:    10,
 		LockKey:      "outbox:test",
-		LockTTL:      time.Minute,
 		Retention:    24 * time.Hour,
 	}
 }
@@ -118,7 +117,7 @@ func TestGroupByEntity(t *testing.T) {
 
 func (s *PollingRelaySuite) TestTickNotLeaderDoesNothing() {
 	// nil lock → someone else is leader this round.
-	s.locker.On("TryLock", mock.Anything, "outbox:test", time.Minute).Return(nil, nil).Once()
+	s.locker.On("TryLock", mock.Anything, "outbox:test").Return(nil, nil).Once()
 
 	s.r.tick(context.Background())
 
@@ -128,7 +127,7 @@ func (s *PollingRelaySuite) TestTickNotLeaderDoesNothing() {
 
 func (s *PollingRelaySuite) TestTickDrainsWhileFullBatch() {
 	lock := &mockLock{}
-	s.locker.On("TryLock", mock.Anything, "outbox:test", time.Minute).Return(lock, nil).Once()
+	s.locker.On("TryLock", mock.Anything, "outbox:test").Return(lock, nil).Once()
 	lock.On("Release", mock.Anything).Return(nil).Once()
 
 	// cfg.BatchSize is 10. First batch: 10 events (all published) → drain again.
@@ -150,7 +149,7 @@ func (s *PollingRelaySuite) TestTickDrainsWhileFullBatch() {
 
 func (s *PollingRelaySuite) TestRunStopsOnContextCancel() {
 	// Always not-leader so ticks are cheap; Run must still exit on cancel.
-	s.locker.On("TryLock", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil)
+	s.locker.On("TryLock", mock.Anything, mock.Anything).Return(nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -166,7 +165,7 @@ func (s *PollingRelaySuite) TestRunStopsOnContextCancel() {
 
 func (s *PollingRelaySuite) TestRunStopsOnClose() {
 	// Always not-leader so ticks are cheap; Run must exit once Close is called.
-	s.locker.On("TryLock", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil)
+	s.locker.On("TryLock", mock.Anything, mock.Anything).Return(nil, nil)
 
 	done := make(chan struct{})
 	go func() { s.r.Run(context.Background()); close(done) }()
@@ -192,7 +191,6 @@ func (s *PollingRelaySuite) TestDefaultRelayConfig() {
 	s.Equal(200*time.Millisecond, cfg.IdleInterval)
 	s.Equal(500, cfg.BatchSize)
 	s.Equal("k", cfg.LockKey)
-	s.Equal(30*time.Second, cfg.LockTTL)
 	s.Equal(7*24*time.Hour, cfg.Retention)
 }
 
@@ -215,21 +213,13 @@ func (s *PollingRelaySuite) TestNewRelayInvalidConfig() {
 	valid := func() PollingRelayConfig {
 		cfg := DefaultPollingRelayConfig("k")
 		cfg.IdleInterval = time.Millisecond
-		cfg.LockTTL = time.Minute
 		return cfg
 	}
 
 	tests := map[string]PollingRelayConfig{
 		"IdleInterval zero": func() PollingRelayConfig { c := valid(); c.IdleInterval = 0; return c }(),
 		"BatchSize zero":    func() PollingRelayConfig { c := valid(); c.BatchSize = 0; return c }(),
-		"LockTTL zero":      func() PollingRelayConfig { c := valid(); c.LockTTL = 0; return c }(),
 		"Retention zero":    func() PollingRelayConfig { c := valid(); c.Retention = 0; return c }(),
-		"LockTTL below IdleInterval": func() PollingRelayConfig {
-			c := valid()
-			c.IdleInterval = time.Minute
-			c.LockTTL = time.Second
-			return c
-		}(),
 	}
 
 	for name, cfg := range tests {

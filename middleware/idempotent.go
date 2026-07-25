@@ -3,7 +3,6 @@ package middleware
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/klemen-forstneric/ember"
 )
@@ -14,12 +13,12 @@ type Lock = ember.Lock
 
 type Locker = ember.Locker
 
-func Idempotent(keyPrefix string, ttl time.Duration, locker Locker, l ember.LoggerCtx) ember.SubscriptionMiddleware {
+func Idempotent(keyPrefix string, locker Locker, l ember.LoggerCtx) ember.SubscriptionMiddleware {
 	return func(next ember.HandleFunc) ember.HandleFunc {
 		return func(ctx context.Context, e *ember.ReceivedEvent) error {
 			key := keyPrefix + "_" + e.ID
 
-			lock, err := locker.TryLock(ctx, key, ttl)
+			lock, err := locker.TryLock(ctx, key)
 			if err != nil {
 				l.Error(ctx, "Failed to acquire idempotency lock", err, "event_id", e.ID, "key", key)
 				return ErrLockerUnavailable

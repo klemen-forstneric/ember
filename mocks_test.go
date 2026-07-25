@@ -172,8 +172,8 @@ type mockLocker struct {
 	mock.Mock
 }
 
-func (m *mockLocker) TryLock(ctx context.Context, key string, ttl time.Duration) (Lock, error) {
-	args := m.Called(ctx, key, ttl)
+func (m *mockLocker) TryLock(ctx context.Context, key string) (Lock, error) {
+	args := m.Called(ctx, key)
 	var lock Lock
 	if v := args.Get(0); v != nil {
 		lock = v.(Lock)

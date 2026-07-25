@@ -22,16 +22,22 @@ end
 return 0
 `)
 
+const defaultLockTTL = 30 * time.Second
+
 // Locker
 type Locker struct {
 	client redis.Cmdable
+	ttl    time.Duration
 }
 
-func NewLocker(client redis.Cmdable) *Locker {
-	return &Locker{client: client}
+func NewLocker(client redis.Cmdable, ttl time.Duration) *Locker {
+	if ttl <= 0 {
+		ttl = defaultLockTTL
+	}
+	return &Locker{client: client, ttl: ttl}
 }
 
-func (l *Locker) TryLock(ctx context.Context, key string, ttl time.Duration) (ember.Lock, error) {
+func (l *Locker) TryLock(ctx context.Context, key string) (ember.Lock, error) {
 	current, err := l.token()
 	if err != nil {
 		return nil, err
@@ -40,7 +46,7 @@ func (l *Locker) TryLock(ctx context.Context, key string, ttl time.Duration) (em
 	args := redis.SetArgs{
 		Mode: "NX",
 		Get:  true,
-		TTL:  ttl,
+		TTL:  l.ttl,
 	}
 
 	previous, err := l.client.SetArgs(ctx, key, current, args).Result()

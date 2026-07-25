@@ -6,14 +6,15 @@ import (
 	"errors"
 	"hash/fnv"
 	"sync"
-	"time"
 
 	"github.com/klemen-forstneric/ember"
 )
 
 // Locker takes postgres session-scoped advisory locks. Each lock holds its own
 // pooled connection, since the session that acquires an advisory lock is the
-// only one that can release it.
+// only one that can release it. Advisory locks have no lease: there is no
+// mid-round expiry, and a hard crash frees the lock only once postgres
+// notices the dead session.
 type Locker struct {
 	pool *sql.DB
 }
@@ -24,10 +25,7 @@ func NewLocker(pool *sql.DB) *Locker {
 
 var _ ember.Locker = (*Locker)(nil)
 
-// TryLock ignores ttl: advisory locks have no lease, so there is no mid-round
-// expiry, but a hard crash frees the lock only once postgres notices the dead
-// session rather than after ttl.
-func (l *Locker) TryLock(ctx context.Context, key string, _ time.Duration) (ember.Lock, error) {
+func (l *Locker) TryLock(ctx context.Context, key string) (ember.Lock, error) {
 	conn, err := l.pool.Conn(ctx)
 	if err != nil {
 		return nil, err

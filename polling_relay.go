@@ -15,14 +15,12 @@ type PollingRelayConfig struct {
 	IdleInterval time.Duration // idle poll cadence (jittered per replica)
 	BatchSize    int           // events fetched per round
 	LockKey      string        // redis efficiency-lock key
-	LockTTL      time.Duration // lock lease; must exceed a bounded round
 	Retention    time.Duration // published_at + Retention → expires_at (TTL)
 }
 
 const (
 	defaultIdleInterval = 200 * time.Millisecond
 	defaultBatchSize    = 500
-	defaultLockTTL      = 30 * time.Second
 	defaultRetention    = 7 * 24 * time.Hour
 )
 
@@ -33,7 +31,6 @@ func DefaultPollingRelayConfig(key string) PollingRelayConfig {
 		IdleInterval: defaultIdleInterval,
 		BatchSize:    defaultBatchSize,
 		LockKey:      key,
-		LockTTL:      defaultLockTTL,
 		Retention:    defaultRetention,
 	}
 }
@@ -49,12 +46,8 @@ func validateRelayConfig(cfg PollingRelayConfig) error {
 		return fmt.Errorf("%w: IdleInterval must be positive", ErrInvalidRelayConfig)
 	case cfg.BatchSize <= 0:
 		return fmt.Errorf("%w: BatchSize must be positive", ErrInvalidRelayConfig)
-	case cfg.LockTTL <= 0:
-		return fmt.Errorf("%w: LockTTL must be positive", ErrInvalidRelayConfig)
 	case cfg.Retention <= 0:
 		return fmt.Errorf("%w: Retention must be positive", ErrInvalidRelayConfig)
-	case cfg.LockTTL <= cfg.IdleInterval:
-		return fmt.Errorf("%w: LockTTL must exceed IdleInterval", ErrInvalidRelayConfig)
 	}
 	return nil
 }
@@ -145,7 +138,7 @@ func (r *PollingRelay) publish(ctx context.Context) (int, error) {
 }
 
 func (r *PollingRelay) tick(ctx context.Context) {
-	lock, err := r.locker.TryLock(ctx, r.cfg.LockKey, r.cfg.LockTTL)
+	lock, err := r.locker.TryLock(ctx, r.cfg.LockKey)
 	if err != nil {
 		r.logger.Error(ctx, "Failed to acquire outbox lock", err, "key", r.cfg.LockKey)
 		return

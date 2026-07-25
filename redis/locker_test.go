@@ -31,20 +31,20 @@ func (s *LockerSuite) SetupTest() {
 		mr.Close()
 	})
 	s.mr = mr
-	s.locker = emberredis.NewLocker(client)
+	s.locker = emberredis.NewLocker(client, time.Minute)
 }
 
 func (s *LockerSuite) TestAcquireThenReleaseFrees() {
 	ctx := context.Background()
 
-	lock, err := s.locker.TryLock(ctx, "k", time.Minute)
+	lock, err := s.locker.TryLock(ctx, "k")
 	s.Require().NoError(err)
 	s.Require().NotNil(lock)
 
 	s.Require().NoError(lock.Release(ctx))
 
 	// After release the key is free — a second acquire succeeds.
-	lock2, err := s.locker.TryLock(ctx, "k", time.Minute)
+	lock2, err := s.locker.TryLock(ctx, "k")
 	s.Require().NoError(err)
 	s.NotNil(lock2)
 }
@@ -53,13 +53,13 @@ func (s *LockerSuite) TestStaleReleaseDoesNotDeleteNewHolder() {
 	ctx := context.Background()
 
 	// Holder A acquires.
-	lockA, err := s.locker.TryLock(ctx, "k", time.Minute)
+	lockA, err := s.locker.TryLock(ctx, "k")
 	s.Require().NoError(err)
 	s.Require().NotNil(lockA)
 
 	// A's lock expires and holder B acquires the same key.
 	s.mr.FastForward(2 * time.Minute)
-	lockB, err := s.locker.TryLock(ctx, "k", time.Minute)
+	lockB, err := s.locker.TryLock(ctx, "k")
 	s.Require().NoError(err)
 	s.Require().NotNil(lockB)
 
@@ -67,7 +67,7 @@ func (s *LockerSuite) TestStaleReleaseDoesNotDeleteNewHolder() {
 	s.Require().NoError(lockA.Release(ctx))
 
 	// B still holds it: a fresh acquire fails (returns nil).
-	lockC, err := s.locker.TryLock(ctx, "k", time.Minute)
+	lockC, err := s.locker.TryLock(ctx, "k")
 	s.Require().NoError(err)
 	s.Nil(lockC, "B's lock must survive A's stale release")
 }

@@ -2,7 +2,6 @@ package ember
 
 import (
 	"context"
-	"time"
 )
 
 // Lock
@@ -12,5 +11,5 @@ type Lock interface {
 
 // Locker
 type Locker interface {
-	TryLock(ctx context.Context, key string, ttl time.Duration) (Lock, error)
+	TryLock(ctx context.Context, key string) (Lock, error)
 }

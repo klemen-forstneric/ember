@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
@@ -21,7 +20,7 @@ func TestLockerTryLockAcquired(t *testing.T) {
 		WithArgs(lockID("k")).
 		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(true))
 
-	l, err := NewLocker(db).TryLock(context.Background(), "k", time.Minute)
+	l, err := NewLocker(db).TryLock(context.Background(), "k")
 
 	require.NoError(t, err)
 	require.NotNil(t, l)
@@ -38,7 +37,7 @@ func TestLockerTryLockNotAcquired(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(false))
 	// No unlock expectation: a lock we never acquired must never be released.
 
-	l, err := NewLocker(db).TryLock(context.Background(), "k", time.Minute)
+	l, err := NewLocker(db).TryLock(context.Background(), "k")
 
 	require.NoError(t, err)
 	require.Nil(t, l)
@@ -55,7 +54,7 @@ func TestLockerTryLockQueryError(t *testing.T) {
 		WithArgs(lockID("k")).
 		WillReturnError(wantErr)
 
-	l, err := NewLocker(db).TryLock(context.Background(), "k", time.Minute)
+	l, err := NewLocker(db).TryLock(context.Background(), "k")
 
 	require.ErrorIs(t, err, wantErr)
 	require.Nil(t, l)
@@ -75,7 +74,7 @@ func TestLockRelease(t *testing.T) {
 		WithArgs(id).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	l, err := NewLocker(db).TryLock(context.Background(), "k", time.Minute)
+	l, err := NewLocker(db).TryLock(context.Background(), "k")
 	require.NoError(t, err)
 	require.NotNil(t, l)
 
@@ -96,7 +95,7 @@ func TestLockReleaseTwiceUnlocksOnce(t *testing.T) {
 		WithArgs(id).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	l, err := NewLocker(db).TryLock(context.Background(), "k", time.Minute)
+	l, err := NewLocker(db).TryLock(context.Background(), "k")
 	require.NoError(t, err)
 
 	require.NoError(t, l.Release(context.Background()))
