@@ -33,11 +33,11 @@ func (s *PublisherSuite) TearDownTest() {
 }
 
 func (s *PublisherSuite) atLeastOncePublisher() *Publisher {
-	return AtLeastOnce(stubIDer{id: "evt-1"}, s.repo, NoopMetadataGetter{}, s.marshaler)
+	return NewPublisher(stubIDer{id: "evt-1"}, NoopMetadataGetter{}, s.marshaler, AtLeastOnce(s.repo))
 }
 
 func (s *PublisherSuite) bestEffortPublisher() *Publisher {
-	return BestEffort(stubIDer{id: "evt-1"}, s.sink, NoopMetadataGetter{}, s.marshaler)
+	return NewPublisher(stubIDer{id: "evt-1"}, NoopMetadataGetter{}, s.marshaler, BestEffort(s.sink))
 }
 
 func (s *PublisherSuite) TestAtLeastOncePersistsEnvelopes() {

@@ -17,9 +17,9 @@ type IDer interface {
 // delivery is work that must run only after the transaction commits.
 type delivery func(ctx context.Context) error
 
-// guarantee is the delivery guarantee a Publisher was built with. Unexported,
-// so the set of guarantees is closed.
-type guarantee interface {
+// Guarantee is the delivery guarantee a Publisher was built with. Sealed: only
+// AtLeastOnce and BestEffort implement it.
+type Guarantee interface {
 	// stage performs the guarantee's durable work inside the caller's
 	// transaction and returns any delivery deferred until after commit.
 	stage(ctx context.Context, envelopes []EventEnvelope) (delivery, error)
@@ -46,16 +46,20 @@ func (g bestEffort) stage(ctx context.Context, envelopes []EventEnvelope) (deliv
 // Publisher builds event envelopes and hands them to its guarantee.
 type Publisher struct {
 	builder   envelopeBuilder
-	guarantee guarantee
+	guarantee Guarantee
+}
+
+func NewPublisher(i IDer, mg MetadataGetter, m EventMarshaler, g Guarantee) *Publisher {
+	return &Publisher{
+		builder:   envelopeBuilder{ider: i, metadata: mg, marshaler: m},
+		guarantee: g,
+	}
 }
 
 // AtLeastOnce persists envelopes to the outbox inside the caller's transaction.
 // A Relay draining that outbox is the sole publisher.
-func AtLeastOnce(i IDer, r EventRepository, mg MetadataGetter, m EventMarshaler) *Publisher {
-	return &Publisher{
-		builder:   envelopeBuilder{ider: i, metadata: mg, marshaler: m},
-		guarantee: atLeastOnce{repo: r},
-	}
+func AtLeastOnce(r EventRepository) Guarantee {
+	return atLeastOnce{repo: r}
 }
 
 // BestEffort persists nothing and pushes to the Sink after EntitySaver commits.
@@ -63,11 +67,8 @@ func AtLeastOnce(i IDer, r EventRepository, mg MetadataGetter, m EventMarshaler)
 // transaction defers the commit past delivery, so a rollback leaves a
 // published event for state that never existed. A crash between commit and
 // push loses the event.
-func BestEffort(i IDer, s Sink, mg MetadataGetter, m EventMarshaler) *Publisher {
-	return &Publisher{
-		builder:   envelopeBuilder{ider: i, metadata: mg, marshaler: m},
-		guarantee: bestEffort{sink: s},
-	}
+func BestEffort(s Sink) Guarantee {
+	return bestEffort{sink: s}
 }
 
 func (p *Publisher) stage(ctx context.Context, events ...Event) (delivery, error) {
