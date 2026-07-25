@@ -49,6 +49,7 @@ func BestEffort(s Sink) Guarantee {
 
 func (g bestEffort) stage(ctx context.Context, envelopes []EventEnvelope) (delivery, error) {
 	return func(ctx context.Context) error {
-		return g.sink.Publish(ctx, envelopes)
+		_, err := g.sink.Publish(ctx, envelopes)
+		return err
 	}, nil
 }

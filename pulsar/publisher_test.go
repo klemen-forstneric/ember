@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/klemen-forstneric/ember"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -19,6 +20,18 @@ func envelope(eventType, entityID string) []ember.EventEnvelope {
 		Metadata:  ember.Metadata{MetadataKeyCorrelationID: "corr-1"},
 		Timestamp: time.Unix(0, 0).UTC(),
 	}}
+}
+
+func twoEnvelopes(eventType string) []ember.EventEnvelope {
+	e := envelope(eventType, "e1")
+	e = append(e, ember.EventEnvelope{
+		ID:        "evt-2",
+		EntityID:  "e2",
+		Event:     &ember.MarshaledEvent{Type: eventType, Data: []byte(`{"k":"v"}`)},
+		Metadata:  ember.Metadata{MetadataKeyCorrelationID: "corr-2"},
+		Timestamp: time.Unix(0, 0).UTC(),
+	})
+	return e
 }
 
 type PublisherSuite struct {
@@ -40,8 +53,9 @@ func (s *PublisherSuite) TestRoutesByEventType() {
 	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
 	p := NewPublisher(s.reg)
 
-	err := p.Publish(context.Background(), envelope("order.created", "e1"))
+	n, err := p.Publish(context.Background(), envelope("order.created", "e1"))
 	s.Require().NoError(err)
+	s.Equal(1, n)
 
 	sent := prod.sent()
 	s.Require().Len(sent, 1)
@@ -52,8 +66,9 @@ func (s *PublisherSuite) TestUnmappedTypeErrors() {
 	s.reg.On("Get", mock.Anything, "payment.refunded").Return(nil, errors.New("unmapped event type"))
 	p := NewPublisher(s.reg)
 
-	err := p.Publish(context.Background(), envelope("payment.refunded", "e1"))
+	n, err := p.Publish(context.Background(), envelope("payment.refunded", "e1"))
 	s.Error(err)
+	s.Equal(0, n)
 }
 
 func (s *PublisherSuite) TestMissingCorrelationIDErrors() {
@@ -62,8 +77,9 @@ func (s *PublisherSuite) TestMissingCorrelationIDErrors() {
 	e := envelope("order.created", "e1")
 	e[0].Metadata = ember.Metadata{} // no correlation id
 
-	err := p.Publish(context.Background(), e)
+	n, err := p.Publish(context.Background(), e)
 	s.Error(err)
+	s.Equal(0, n)
 	// Validation happens before any producer is resolved.
 	s.reg.AssertNotCalled(s.T(), "Get")
 }
@@ -74,15 +90,35 @@ func (s *PublisherSuite) TestAggregatesSendErrors() {
 	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
 	p := NewPublisher(s.reg)
 
-	err := p.Publish(context.Background(), envelope("order.created", "e1"))
+	n, err := p.Publish(context.Background(), envelope("order.created", "e1"))
 	s.Error(err)
+	s.Equal(0, n)
+}
+
+// TestPartialFailureReturnsLeadingRun pins the index-attributed error slice: a
+// failure on the second send must not be reported for the first, which succeeded.
+func (s *PublisherSuite) TestPartialFailureReturnsLeadingRun() {
+	prod := &mockProducer{}
+	prod.On("SendAsync", mock.Anything, mock.MatchedBy(func(m *pulsar.ProducerMessage) bool {
+		return m.Key == "e1"
+	}), mock.Anything).Return(nil)
+	prod.On("SendAsync", mock.Anything, mock.MatchedBy(func(m *pulsar.ProducerMessage) bool {
+		return m.Key == "e2"
+	}), mock.Anything).Return(errors.New("boom"))
+	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
+	p := NewPublisher(s.reg)
+
+	n, err := p.Publish(context.Background(), twoEnvelopes("order.created"))
+	s.Error(err)
+	s.Equal(1, n)
 }
 
 func (s *PublisherSuite) TestEmptyIsNoop() {
 	p := NewPublisher(s.reg)
 
-	err := p.Publish(context.Background(), []ember.EventEnvelope{})
+	n, err := p.Publish(context.Background(), []ember.EventEnvelope{})
 	s.Require().NoError(err)
+	s.Equal(0, n)
 	s.reg.AssertNotCalled(s.T(), "Get")
 }
 

@@ -28,21 +28,21 @@ func NewPublisher(w writer, routes map[string]string) *Publisher {
 	return &Publisher{w: w, routes: routes}
 }
 
-func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope) error {
+func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope) (int, error) {
 	if len(envelopes) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	msgs := make([]kafka.Message, 0, len(envelopes))
 	for _, e := range envelopes {
 		correlationID, ok := e.Metadata[MetadataKeyCorrelationID].(string)
 		if !ok {
-			return fmt.Errorf("invalid metadata, missing key '%v'", MetadataKeyCorrelationID)
+			return 0, fmt.Errorf("invalid metadata, missing key '%v'", MetadataKeyCorrelationID)
 		}
 
 		topic, ok := p.routes[e.Event.Type]
 		if !ok {
-			return fmt.Errorf("no topic configured for event type %q", e.Event.Type)
+			return 0, fmt.Errorf("no topic configured for event type %q", e.Event.Type)
 		}
 
 		payload, err := json.Marshal(&message{
@@ -55,7 +55,7 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 			PublishedAt:   e.Timestamp,
 		})
 		if err != nil {
-			return err
+			return 0, err
 		}
 
 		msgs = append(msgs, kafka.Message{
@@ -66,7 +66,10 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 		})
 	}
 
-	return p.w.WriteMessages(ctx, msgs...)
+	if err := p.w.WriteMessages(ctx, msgs...); err != nil {
+		return 0, err
+	}
+	return len(envelopes), nil
 }
 
 func (p *Publisher) Close() error {

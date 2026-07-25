@@ -188,7 +188,7 @@ func (s *EntitySaverSuite) TestBestEffortDeliversAfterCommit() {
 	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
 		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
-	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once().
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(1, nil).Once().
 		Run(func(mock.Arguments) {
 			s.True(tx.committed, "delivery must run after commit")
 		})
@@ -239,7 +239,7 @@ func (s *EntitySaverSuite) TestBestEffortDeliveryIgnoresPostCommitCancellation()
 		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
 
 	var deliveredCtx context.Context
-	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once().
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(1, nil).Once().
 		Run(func(args mock.Arguments) {
 			deliveredCtx = args.Get(0).(context.Context)
 		})
@@ -261,7 +261,7 @@ func (s *EntitySaverSuite) TestBestEffortDeliveryFailureStillAdvancesEntity() {
 	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
 		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
-	s.sink.On("Publish", mock.Anything, mock.Anything).Return(errors.New("broker down")).Once()
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(0, errors.New("broker down")).Once()
 
 	err := saver.Save(s.ctx, e)
 
@@ -285,7 +285,7 @@ func (s *EntitySaverSuite) TestBestEffortWarnsWhenJoiningCallerTx() {
 	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
 		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
-	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(1, nil).Once()
 	logger.On("Warn", joinedTxWarning).Return().Once()
 
 	err := saver.Save(s.ctx, e)
@@ -306,7 +306,7 @@ func (s *EntitySaverSuite) TestBestEffortSilentWhenEmberOwnsTx() {
 	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
 		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
-	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(1, nil).Once()
 
 	err := saver.Save(s.ctx, e)
 

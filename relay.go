@@ -89,32 +89,46 @@ func NewRelay(r EventRepository, s Sink, l Locker, log LoggerCtx, cfg RelayConfi
 	}, nil
 }
 
+// groupByEntity partitions events into per-entity runs, preserving each
+// entity's internal order and ordering groups by first appearance.
+func groupByEntity(events []EventEnvelope) [][]EventEnvelope {
+	index := make(map[string]int, len(events))
+	groups := make([][]EventEnvelope, 0, len(events))
+	for _, e := range events {
+		i, ok := index[e.EntityID]
+		if !ok {
+			index[e.EntityID] = len(groups)
+			groups = append(groups, []EventEnvelope{e})
+			continue
+		}
+		groups[i] = append(groups[i], e)
+	}
+	return groups
+}
+
 func (r *Relay) publishBatch(ctx context.Context) (int, error) {
 	events, err := r.repository.ListUnpublished(ctx, r.cfg.BatchSize)
 	if err != nil {
 		return 0, err
 	}
 
-	failed := make(map[string]bool)
 	published := make([]string, 0, len(events))
-	for i := range events {
-		e := events[i]
-		if failed[e.EntityID] {
-			continue
+	for _, group := range groupByEntity(events) {
+		n, err := r.sink.Publish(ctx, group)
+		for _, e := range group[:n] {
+			published = append(published, e.ID)
+
+			elapsed := time.Since(e.Timestamp)
+			r.logger.Info(ctx, "Published event", "eventId", e.ID, "type", e.Event.Type,
+				"entity_id", e.EntityID, "payload", json.RawMessage(e.Event.Data),
+				"metadata", e.Metadata, "timestamp", e.Timestamp,
+				"elapsed_ms", elapsed.Milliseconds())
 		}
-		if err := r.sink.Publish(ctx, []EventEnvelope{e}); err != nil {
-			failed[e.EntityID] = true
+		if err != nil && n < len(group) {
+			e := group[n]
 			r.logger.Warn(ctx, "Failed to publish event, will retry",
 				"error", err, "eventId", e.ID, "type", e.Event.Type, "entity_id", e.EntityID)
-			continue
 		}
-		published = append(published, e.ID)
-
-		elapsed := time.Since(e.Timestamp)
-		r.logger.Info(ctx, "Published event", "eventId", e.ID, "type", e.Event.Type,
-			"entity_id", e.EntityID, "payload", json.RawMessage(e.Event.Data),
-			"metadata", e.Metadata, "timestamp", e.Timestamp,
-			"elapsed_ms", elapsed.Milliseconds())
 	}
 
 	if len(published) > 0 {

@@ -28,9 +28,9 @@ func NewPublisher(r producerRegistry) *Publisher {
 	return &Publisher{registry: r}
 }
 
-func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope) error {
+func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope) (int, error) {
 	if len(envelopes) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	type pending struct {
@@ -43,12 +43,12 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 	for _, e := range envelopes {
 		correlationID, ok := e.Metadata[MetadataKeyCorrelationID].(string)
 		if !ok {
-			return fmt.Errorf("invalid metadata, missing key '%v'", MetadataKeyCorrelationID)
+			return 0, fmt.Errorf("invalid metadata, missing key '%v'", MetadataKeyCorrelationID)
 		}
 
 		prod, err := p.registry.Get(ctx, e.Event.Type)
 		if err != nil {
-			return err
+			return 0, err
 		}
 
 		payload, err := json.Marshal(&message{
@@ -61,7 +61,7 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 			PublishedAt:   e.Timestamp,
 		})
 		if err != nil {
-			return err
+			return 0, err
 		}
 
 		prepared = append(prepared, pending{
@@ -74,25 +74,25 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 		})
 	}
 
+	errs := make([]error, len(prepared))
+
 	var wg sync.WaitGroup
-	ch := make(chan error, len(prepared))
-	for _, pm := range prepared {
+	for i, pm := range prepared {
 		wg.Add(1)
+		i, pm := i, pm
 		pm.prod.SendAsync(ctx, pm.msg, func(_ pulsar.MessageID, _ *pulsar.ProducerMessage, err error) {
-			ch <- err
+			errs[i] = err
 			wg.Done()
 		})
 	}
 	wg.Wait()
-	close(ch)
 
-	var errs []error
-	for err := range ch {
+	for i, err := range errs {
 		if err != nil {
-			errs = append(errs, err)
+			return i, errors.Join(errs[i:]...)
 		}
 	}
-	return errors.Join(errs...)
+	return len(prepared), nil
 }
 
 func (p *Publisher) Close() error {

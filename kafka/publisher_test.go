@@ -38,8 +38,9 @@ func (s *PublisherSuite) TestRoutesByEventType() {
 	s.w.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
 	p := NewPublisher(s.w, map[string]string{"order.created": "orders"})
 
-	err := p.Publish(context.Background(), []ember.EventEnvelope{envelope("order.created", "e1")})
+	n, err := p.Publish(context.Background(), []ember.EventEnvelope{envelope("order.created", "e1")})
 	s.Require().NoError(err)
+	s.Equal(1, n)
 
 	written := s.w.written()
 	s.Require().Len(written, 1)
@@ -54,11 +55,12 @@ func (s *PublisherSuite) TestMultipleTopicsInOneBatch() {
 		"payment.settled": "payments",
 	})
 
-	err := p.Publish(context.Background(), []ember.EventEnvelope{
+	n, err := p.Publish(context.Background(), []ember.EventEnvelope{
 		envelope("order.created", "e1"),
 		envelope("payment.settled", "e2"),
 	})
 	s.Require().NoError(err)
+	s.Equal(2, n)
 
 	// A multi-topic publish must be a single batched WriteMessages call.
 	s.w.AssertNumberOfCalls(s.T(), "WriteMessages", 1)
@@ -72,8 +74,9 @@ func (s *PublisherSuite) TestMultipleTopicsInOneBatch() {
 func (s *PublisherSuite) TestUnmappedTypeErrors() {
 	p := NewPublisher(s.w, map[string]string{})
 
-	err := p.Publish(context.Background(), []ember.EventEnvelope{envelope("payment.refunded", "e1")})
+	n, err := p.Publish(context.Background(), []ember.EventEnvelope{envelope("payment.refunded", "e1")})
 	s.Error(err)
+	s.Equal(0, n)
 	s.w.AssertNotCalled(s.T(), "WriteMessages")
 }
 
@@ -83,8 +86,9 @@ func (s *PublisherSuite) TestMissingCorrelationIDErrors() {
 	e := envelope("order.created", "e1")
 	e.Metadata = ember.Metadata{} // no correlation id
 
-	err := p.Publish(context.Background(), []ember.EventEnvelope{e})
+	n, err := p.Publish(context.Background(), []ember.EventEnvelope{e})
 	s.Error(err)
+	s.Equal(0, n)
 	s.w.AssertNotCalled(s.T(), "WriteMessages")
 }
 
@@ -92,15 +96,17 @@ func (s *PublisherSuite) TestPropagatesWriteError() {
 	s.w.On("WriteMessages", mock.Anything, mock.Anything).Return(errors.New("boom"))
 	p := NewPublisher(s.w, map[string]string{"order.created": "orders"})
 
-	err := p.Publish(context.Background(), []ember.EventEnvelope{envelope("order.created", "e1")})
+	n, err := p.Publish(context.Background(), []ember.EventEnvelope{envelope("order.created", "e1")})
 	s.Error(err)
+	s.Equal(0, n)
 }
 
 func (s *PublisherSuite) TestEmptyIsNoop() {
 	p := NewPublisher(s.w, map[string]string{})
 
-	err := p.Publish(context.Background(), []ember.EventEnvelope{})
+	n, err := p.Publish(context.Background(), []ember.EventEnvelope{})
 	s.Require().NoError(err)
+	s.Equal(0, n)
 	s.w.AssertNotCalled(s.T(), "WriteMessages")
 }
 

@@ -33,11 +33,11 @@ func NewPublisher(cfg PublisherConfig, c snsClient, l ember.LoggerCtx) *Publishe
 	}
 }
 
-func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope) error {
-	for _, e := range envelopes {
+func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope) (int, error) {
+	for i, e := range envelopes {
 		correlationId, ok := e.Metadata[MetadataKeyCorrelationID].(string)
 		if !ok {
-			return fmt.Errorf("invalid metadata, missing key '%v'", MetadataKeyCorrelationID)
+			return i, fmt.Errorf("invalid metadata, missing key '%v'", MetadataKeyCorrelationID)
 		}
 
 		m := &message{
@@ -52,7 +52,7 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 
 		payload, err := json.Marshal(m)
 		if err != nil {
-			return errors.Wrap(err, "could not marshal the message")
+			return i, errors.Wrap(err, "could not marshal the message")
 		}
 
 		in := &sns.PublishInput{
@@ -63,11 +63,11 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 		}
 
 		if _, err := p.client.Publish(ctx, in); err != nil {
-			return errors.Wrap(err, "could not publish the message")
+			return i, errors.Wrap(err, "could not publish the message")
 		}
 	}
 
-	return nil
+	return len(envelopes), nil
 }
 
 var _ ember.Sink = (*Publisher)(nil)
