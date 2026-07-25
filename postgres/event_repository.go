@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"time"
 
@@ -15,11 +14,11 @@ import (
 // ember.EventStore (inside a transaction); ListUnpublished/MarkPublished are
 // driven by a relay.
 type EventRepository struct {
-	db    *sql.DB
+	db    *DB
 	table string
 }
 
-func NewEventRepository(db *sql.DB, table string) *EventRepository {
+func NewEventRepository(db *DB, table string) *EventRepository {
 	return &EventRepository{db: db, table: table}
 }
 
@@ -30,14 +29,22 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 
 	insert := psql.Insert(r.table).
 		Columns("id", "entity_id", "type", "data", "metadata", "seq", "created_at", "published")
+
 	for _, e := range envelopes {
 		metadata, err := json.Marshal(e.Metadata)
 		if err != nil {
 			return err
 		}
+
 		insert = insert.Values(
-			e.ID, e.EntityID, e.Event.Type, e.Event.Data, metadata,
-			e.Timestamp.UnixNano(), e.Timestamp.UTC(), false,
+			e.ID,
+			e.EntityID,
+			e.Event.Type,
+			e.Event.Data,
+			metadata,
+			e.Timestamp.UnixNano(),
+			e.Timestamp.UTC(),
+			false,
 		)
 	}
 
@@ -45,7 +52,7 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 	if err != nil {
 		return err
 	}
-	_, err = querierFrom(ctx, r.db).ExecContext(ctx, query, args...)
+	_, err = r.db.Conn(ctx).ExecContext(ctx, query, args...)
 	return err
 }
 
@@ -55,6 +62,7 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]emb
 		From(r.table).
 		Where(sq.Eq{"published": false}).
 		OrderBy("seq ASC")
+
 	if limit > 0 {
 		qb = qb.Limit(uint64(limit))
 	}
@@ -63,13 +71,13 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]emb
 	if err != nil {
 		return nil, err
 	}
-	rows, err := querierFrom(ctx, r.db).QueryContext(ctx, query, args...)
+	rows, err := r.db.Conn(ctx).QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var out []ember.EventEnvelope
+	var es []ember.EventEnvelope
 	for rows.Next() {
 		var (
 			id, entityID, typ string
@@ -85,18 +93,24 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]emb
 				return nil, err
 			}
 		}
-		out = append(out, ember.EventEnvelope{
-			ID:        id,
-			EntityID:  entityID,
-			Event:     &ember.MarshaledEvent{Type: typ, Data: data},
+
+		es = append(es, ember.EventEnvelope{
+			ID:       id,
+			EntityID: entityID,
+			Event: &ember.MarshaledEvent{
+				Type: typ,
+				Data: data,
+			},
 			Metadata:  md,
 			Timestamp: createdAt,
 		})
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return out, nil
+
+	return es, nil
 }
 
 func (r *EventRepository) MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error {
@@ -113,6 +127,6 @@ func (r *EventRepository) MarkPublished(ctx context.Context, ids []string, expir
 	if err != nil {
 		return err
 	}
-	_, err = querierFrom(ctx, r.db).ExecContext(ctx, query, args...)
+	_, err = r.db.Conn(ctx).ExecContext(ctx, query, args...)
 	return err
 }

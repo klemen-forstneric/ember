@@ -18,9 +18,9 @@ func TestWithinTxCommitsOnSuccess(t *testing.T) {
 	mock.ExpectExec("INSERT").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	tr := NewTransactor(db)
-	err = tr.WithinTx(context.Background(), func(ctx context.Context) error {
-		_, err := querierFrom(ctx, db).ExecContext(ctx, "INSERT INTO t VALUES (1)")
+	pg := NewDB(db)
+	err = pg.WithinTx(context.Background(), func(ctx context.Context) error {
+		_, err := pg.Conn(ctx).ExecContext(ctx, "INSERT INTO t VALUES (1)")
 		return err
 	})
 
@@ -37,8 +37,8 @@ func TestWithinTxRollsBackOnError(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectRollback()
 
-	tr := NewTransactor(db)
-	err = tr.WithinTx(context.Background(), func(ctx context.Context) error { return boom })
+	pg := NewDB(db)
+	err = pg.WithinTx(context.Background(), func(ctx context.Context) error { return boom })
 
 	require.ErrorIs(t, err, boom)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -57,14 +57,14 @@ func TestWithinTxReentrantJoinsExistingTx(t *testing.T) {
 
 	outer, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
-	ctx := ctxWithTx(context.Background(), outer)
+	ctx := context.WithValue(context.Background(), txKey{}, outer)
 
-	tr := NewTransactor(db)
+	pg := NewDB(db)
 	ran := false
-	err = tr.WithinTx(ctx, func(ctx context.Context) error {
+	err = pg.WithinTx(ctx, func(ctx context.Context) error {
 		ran = true
-		require.NotNil(t, txFromCtx(ctx), "fn keeps the existing tx on ctx")
-		_, e := querierFrom(ctx, db).ExecContext(ctx, "INSERT INTO t VALUES (1)")
+		require.NotNil(t, ctx.Value(txKey{}), "fn keeps the existing tx on ctx")
+		_, e := pg.Conn(ctx).ExecContext(ctx, "INSERT INTO t VALUES (1)")
 		return e
 	})
 	require.NoError(t, err)
@@ -81,26 +81,29 @@ func TestWithinTxBeginError(t *testing.T) {
 	boom := errors.New("begin boom")
 	mock.ExpectBegin().WillReturnError(boom)
 
-	tr := NewTransactor(db)
-	err = tr.WithinTx(context.Background(), func(ctx context.Context) error { return nil })
+	pg := NewDB(db)
+	err = pg.WithinTx(context.Background(), func(ctx context.Context) error { return nil })
 
 	require.ErrorIs(t, err, boom)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestQuerierFrom(t *testing.T) {
+// Conn returns the ctx transaction when one is active, else the pool.
+func TestConn(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
 
-	// no tx on ctx -> returns db
-	require.Equal(t, querier(db), querierFrom(context.Background(), db))
+	pg := NewDB(db)
 
-	// tx on ctx -> returns that tx, not db
+	// no tx on ctx -> returns the pool
+	require.Equal(t, conn(db), pg.Conn(context.Background()))
+
+	// tx on ctx -> returns that tx, not the pool
 	mock.ExpectBegin()
 	tx, err := db.Begin()
 	require.NoError(t, err)
-	require.Equal(t, querier(tx), querierFrom(ctxWithTx(context.Background(), tx), db))
+	require.Equal(t, conn(tx), pg.Conn(context.WithValue(context.Background(), txKey{}, tx)))
 
 	mock.ExpectRollback()
 	require.NoError(t, tx.Rollback())

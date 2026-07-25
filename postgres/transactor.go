@@ -9,49 +9,43 @@ import (
 
 type txKey struct{}
 
-func ctxWithTx(ctx context.Context, tx *sql.Tx) context.Context {
-	return context.WithValue(ctx, txKey{}, tx)
-}
-
-func txFromCtx(ctx context.Context) *sql.Tx {
-	tx, _ := ctx.Value(txKey{}).(*sql.Tx)
-	return tx
-}
-
-// querier is the subset of *sql.DB / *sql.Tx the repositories use, so a write
+// conn is the subset of *sql.DB / *sql.Tx the repositories use, so a write
 // can run on whichever is active on the ctx.
-type querier interface {
+type conn interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func querierFrom(ctx context.Context, db *sql.DB) querier {
-	if tx := txFromCtx(ctx); tx != nil {
+// DB wraps the connection pool. It runs transactions (satisfying ember.Transactor)
+// and hands repositories the handle bound to the current ctx.
+type DB struct {
+	pool *sql.DB
+}
+
+func NewDB(pool *sql.DB) *DB {
+	return &DB{pool: pool}
+}
+
+var _ ember.Transactor = (*DB)(nil)
+
+// Conn returns the transaction carried on ctx if one is active, else the pool.
+func (d *DB) Conn(ctx context.Context) conn {
+	if tx, ok := ctx.Value(txKey{}).(*sql.Tx); ok {
 		return tx
 	}
-	return db
+	return d.pool
 }
 
-// Transactor runs work inside a database/sql transaction. Reentrant: if the ctx
-// already carries a *sql.Tx it joins that transaction rather than beginning a
-// nested one (database/sql has no nested transactions).
-type Transactor struct {
-	db *sql.DB
-}
-
-func NewTransactor(db *sql.DB) *Transactor {
-	return &Transactor{db: db}
-}
-
-var _ ember.Transactor = (*Transactor)(nil)
-
-func (t *Transactor) WithinTx(ctx context.Context, fn func(ctx context.Context) error) error {
-	if txFromCtx(ctx) != nil {
+// WithinTx runs fn inside a transaction. Reentrant: if the ctx already carries a
+// *sql.Tx it joins that transaction rather than beginning a nested one
+// (database/sql has no nested transactions).
+func (d *DB) WithinTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if _, ok := ctx.Value(txKey{}).(*sql.Tx); ok {
 		return fn(ctx)
 	}
 
-	tx, err := t.db.BeginTx(ctx, nil)
+	tx, err := d.pool.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -61,7 +55,7 @@ func (t *Transactor) WithinTx(ctx context.Context, fn func(ctx context.Context) 
 			_ = tx.Rollback()
 		}
 	}()
-	if err := fn(ctxWithTx(ctx, tx)); err != nil {
+	if err := fn(context.WithValue(ctx, txKey{}, tx)); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

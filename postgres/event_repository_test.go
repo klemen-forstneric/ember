@@ -28,7 +28,7 @@ func TestEventSaveInsertsUnpublished(t *testing.T) {
 
 	mock.ExpectExec("INSERT INTO events").WillReturnResult(sqlmock.NewResult(0, 2))
 
-	repo := NewEventRepository(db, "events")
+	repo := NewEventRepository(NewDB(db), "events")
 	err = repo.Save(context.Background(), []ember.EventEnvelope{
 		env("e1", time.Unix(1, 0).UTC()),
 		env("e2", time.Unix(2, 0).UTC()),
@@ -44,7 +44,7 @@ func TestEventSaveEmptyIsNoop(t *testing.T) {
 	defer db.Close()
 	// No expectations: Save with no envelopes must issue no query.
 
-	repo := NewEventRepository(db, "events")
+	repo := NewEventRepository(NewDB(db), "events")
 	require.NoError(t, repo.Save(context.Background(), nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -59,7 +59,7 @@ func TestEventListUnpublishedMapsRows(t *testing.T) {
 		AddRow("e1", "A", "Created", []byte(`{"k":"v"}`), []byte(`{"corr":"c-e1"}`), ts)
 	mock.ExpectQuery("SELECT .* FROM events").WillReturnRows(rows)
 
-	repo := NewEventRepository(db, "events")
+	repo := NewEventRepository(NewDB(db), "events")
 	got, err := repo.ListUnpublished(context.Background(), 10)
 
 	require.NoError(t, err)
@@ -80,7 +80,7 @@ func TestEventMarkPublished(t *testing.T) {
 
 	mock.ExpectExec("UPDATE events").WillReturnResult(sqlmock.NewResult(0, 2))
 
-	repo := NewEventRepository(db, "events")
+	repo := NewEventRepository(NewDB(db), "events")
 	err = repo.MarkPublished(context.Background(), []string{"e1", "e2"}, time.Unix(9, 0).UTC())
 
 	require.NoError(t, err)
@@ -92,7 +92,7 @@ func TestEventMarkPublishedEmptyIsNoop(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	repo := NewEventRepository(db, "events")
+	repo := NewEventRepository(NewDB(db), "events")
 	require.NoError(t, repo.MarkPublished(context.Background(), nil, time.Now()))
 	require.NoError(t, mock.ExpectationsWereMet())
 }

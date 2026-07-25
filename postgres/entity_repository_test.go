@@ -21,9 +21,9 @@ func TestEntitySaveJoinsTransaction(t *testing.T) {
 	mock.ExpectExec("INSERT INTO entities").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	repo := NewEntityRepository(db, "entities")
-	tr := NewTransactor(db)
-	err = tr.WithinTx(context.Background(), func(ctx context.Context) error {
+	pg := NewDB(db)
+	repo := NewEntityRepository(pg, "entities")
+	err = pg.WithinTx(context.Background(), func(ctx context.Context) error {
 		return repo.Save(ctx, &ember.MarshaledEntity{ID: "1", Type: "order", Version: ember.NewVersion(1), Data: []byte(`{}`)})
 	})
 
@@ -39,7 +39,7 @@ func TestEntitySaveVersionConflict(t *testing.T) {
 
 	mock.ExpectExec("INSERT INTO entities").WillReturnResult(sqlmock.NewResult(0, 0))
 
-	repo := NewEntityRepository(db, "entities")
+	repo := NewEntityRepository(NewDB(db), "entities")
 	err = repo.Save(context.Background(), &ember.MarshaledEntity{ID: "1", Type: "order", Version: ember.NewVersion(2), Data: []byte(`{}`)})
 
 	require.ErrorIs(t, err, ember.ErrVersionConflict)
