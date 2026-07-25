@@ -54,7 +54,24 @@ func (s *PublisherSuite) TestAtLeastOncePersistsEnvelopes() {
 	err := s.atLeastOncePublisher().Publish(s.ctx, evt)
 
 	s.Require().NoError(err)
-	// sink is never touched — asserted by TearDownTest.
+}
+
+func (s *PublisherSuite) TestAtLeastOncePreservesEmitOrder() {
+	evt1 := fakeEvent{entityID: "A", typ: "Created"}
+	evt2 := fakeEvent{entityID: "B", typ: "Updated"}
+	m1 := &MarshaledEvent{Type: "Created", Data: []byte(`{}`)}
+	m2 := &MarshaledEvent{Type: "Updated", Data: []byte(`{}`)}
+	s.marshaler.On("Marshal", mock.Anything, evt1).Return(m1, nil)
+	s.marshaler.On("Marshal", mock.Anything, evt2).Return(m2, nil)
+	s.repo.On("Save", mock.Anything, mock.MatchedBy(func(envs []EventEnvelope) bool {
+		return len(envs) == 2 &&
+			envs[0].EntityID == "A" && envs[0].Event == m1 &&
+			envs[1].EntityID == "B" && envs[1].Event == m2
+	})).Return(nil).Once()
+
+	err := s.atLeastOncePublisher().Publish(s.ctx, evt1, evt2)
+
+	s.Require().NoError(err)
 }
 
 func (s *PublisherSuite) TestAtLeastOnceMarshalError() {
@@ -64,7 +81,6 @@ func (s *PublisherSuite) TestAtLeastOnceMarshalError() {
 	err := s.atLeastOncePublisher().Publish(s.ctx, evt)
 
 	s.Require().Error(err)
-	// repo.Save must NOT be called — asserted by TearDownTest.
 }
 
 func (s *PublisherSuite) TestAtLeastOnceRepositoryError() {
@@ -100,7 +116,6 @@ func (s *PublisherSuite) TestBestEffortPublishesToSink() {
 	err := s.bestEffortPublisher().Publish(s.ctx, evt)
 
 	s.Require().NoError(err)
-	// repo is never touched — asserted by TearDownTest.
 }
 
 func (s *PublisherSuite) TestBestEffortSinkError() {
@@ -129,7 +144,6 @@ func (s *PublisherSuite) TestBestEffortStageDefersDelivery() {
 }
 
 func (s *PublisherSuite) TestPublishNoEventsIsNoop() {
-	// no expectations set anywhere; TearDownTest catches any unexpected call.
 	s.Require().NoError(s.atLeastOncePublisher().Publish(s.ctx))
 	s.Require().NoError(s.bestEffortPublisher().Publish(s.ctx))
 }

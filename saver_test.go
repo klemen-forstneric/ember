@@ -45,7 +45,6 @@ func (s *EntitySaverSuite) TearDownTest() {
 }
 
 func (s *EntitySaverSuite) TestSaveNoEntitiesIsNoop() {
-	// no expectations set anywhere; TearDownTest catches any unexpected call.
 	err := s.saver.Save(s.ctx)
 
 	s.Require().NoError(err)
@@ -56,7 +55,6 @@ func (s *EntitySaverSuite) TestSaveSingleNoEventsSkipsTx() {
 	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
 	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
 	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
-	// tx.WithinTx must NOT be called (no expectations set) — asserted by TearDownTest.
 
 	err := s.saver.Save(s.ctx, e)
 
@@ -172,10 +170,16 @@ func (s *EntitySaverSuite) TestSaveTwoTypesOneTx() {
 	marsh2.AssertExpectations(s.T())
 }
 
-func (s *EntitySaverSuite) TestBestEffortDeliversAfterCommit() {
+// bestEffortSaver builds an EntitySaver on a BestEffort publisher against the
+// suite's sink and a fresh recordingTransactor.
+func (s *EntitySaverSuite) bestEffortSaver() (*EntitySaver, *recordingTransactor) {
 	tx := &recordingTransactor{}
 	publisher := BestEffort(stubIDer{id: "evt-1"}, s.sink, NoopMetadataGetter{}, s.eventMarsh)
-	saver := NewEntitySaver(publisher, tx, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
+	return NewEntitySaver(publisher, tx, Bind[*fakeEntity](s.entityRepo, s.entityMarsh)), tx
+}
+
+func (s *EntitySaverSuite) TestBestEffortDeliversAfterCommit() {
+	saver, tx := s.bestEffortSaver()
 
 	e := newFakeEntity("1")
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
@@ -194,13 +198,61 @@ func (s *EntitySaverSuite) TestBestEffortDeliversAfterCommit() {
 	s.Require().NoError(err)
 	s.Empty(e.events().All())
 	s.Equal(uint64(1), e.Version().Value())
-	// eventRepo is never touched under BestEffort — asserted by TearDownTest.
+}
+
+func (s *EntitySaverSuite) TestBestEffortCommitFailureDoesNotDeliver() {
+	publisher := BestEffort(stubIDer{id: "evt-1"}, s.sink, NoopMetadataGetter{}, s.eventMarsh)
+	saver := NewEntitySaver(publisher, s.tx, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
+
+	e := newFakeEntity("1")
+	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
+	version := e.Version()
+	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
+	commitErr := errors.New("commit boom")
+	s.tx.On("WithinTx", mock.Anything).Return(commitErr).Once()
+	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
+	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
+		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
+
+	err := saver.Save(s.ctx, e)
+
+	s.Require().ErrorIs(err, commitErr)
+	s.Require().NotErrorIs(err, ErrDeliveryFailed)
+	s.sink.AssertNotCalled(s.T(), "Publish", mock.Anything, mock.Anything)
+	s.Equal(version, e.Version())
+	s.Len(e.events().All(), 1)
+}
+
+func (s *EntitySaverSuite) TestBestEffortDeliveryIgnoresPostCommitCancellation() {
+	ctx, cancel := context.WithCancel(context.Background())
+	tx := &cancelAfterCommitTransactor{cancel: cancel}
+	publisher := BestEffort(stubIDer{id: "evt-1"}, s.sink, NoopMetadataGetter{}, s.eventMarsh)
+	saver := NewEntitySaver(publisher, tx, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
+
+	e := newFakeEntity("1")
+	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
+	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
+	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
+	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
+		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
+
+	var deliveredCtx context.Context
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once().
+		Run(func(args mock.Arguments) {
+			deliveredCtx = args.Get(0).(context.Context)
+		})
+
+	err := saver.Save(ctx, e)
+
+	s.Require().NoError(err)
+	s.Require().NotNil(deliveredCtx)
+	s.NoError(deliveredCtx.Err())
 }
 
 func (s *EntitySaverSuite) TestBestEffortDeliveryFailureStillAdvancesEntity() {
-	tx := &recordingTransactor{}
-	publisher := BestEffort(stubIDer{id: "evt-1"}, s.sink, NoopMetadataGetter{}, s.eventMarsh)
-	saver := NewEntitySaver(publisher, tx, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
+	saver, _ := s.bestEffortSaver()
 
 	e := newFakeEntity("1")
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})

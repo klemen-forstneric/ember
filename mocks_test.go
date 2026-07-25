@@ -144,6 +144,20 @@ func (t *recordingTransactor) WithinTx(ctx context.Context, fn func(context.Cont
 	return nil
 }
 
+// cancelAfterCommitTransactor runs fn, then cancels the ctx's own cancel func,
+// simulating a client disconnect that lands right after commit.
+type cancelAfterCommitTransactor struct {
+	cancel context.CancelFunc
+}
+
+func (t *cancelAfterCommitTransactor) WithinTx(ctx context.Context, fn func(context.Context) error) error {
+	if err := fn(ctx); err != nil {
+		return err
+	}
+	t.cancel()
+	return nil
+}
+
 // mockLocker is a testify mock for Locker.
 type mockLocker struct {
 	mock.Mock
