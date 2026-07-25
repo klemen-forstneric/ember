@@ -6,7 +6,7 @@
 
 **Architecture:** A `Publisher` holds an unexported `guarantee` whose single method `stage` performs durable work inside the caller's transaction and returns a `delivery` closure for anything that must wait for commit. `atLeastOnce` persists to the outbox and returns no delivery (the `Relay` publishes). `bestEffort` persists nothing and returns a delivery that pushes to the `Sink`. `EntitySaver` calls `stage` inside its transaction and runs the returned delivery in its existing post-commit block.
 
-**Tech Stack:** Go 1.26.3, `github.com/klemen-forstneric/ember`, testify (`suite` + `mock`), `github.com/cenkalti/backoff/v4`.
+**Tech Stack:** Go 1.26.3, `github.com/klemen-forstneric/ember`, testify (`suite` + `mock`), `github.com/cenkalti/backoff/v7` (upgraded from v4 in Task 3).
 
 **Spec:** `docs/superpowers/specs/2026-07-25-ember-event-delivery-design.md`
 
@@ -18,7 +18,7 @@
 - Keep comments minimal — a terse one-liner only where the code is genuinely non-obvious. No paragraph rationale blocks.
 - Conventional Commits for every commit message.
 - **Resolved open decision 1:** there is one outbox interface. `EventRepository` grows `ListUnpublished` and `MarkPublished` instead of gaining a sibling, so `AtLeastOnce` requires a drainable outbox at compile time. mongo's package-local `eventRepository` is deleted, not promoted.
-- **Resolved open decision 2:** `RetryingSink` bounds attempts, not elapsed time. `MaxTries uint64` counts total attempts including the first; defaults are `InitialInterval` 100ms, `MaxInterval` 1s, `MaxTries` 3. The old `MaxElapsedTime: -1` default (zero retries) is dropped. Stay on `backoff/v4` — the v7 upgrade is a separate change.
+- **Resolved open decision 2:** `RetryingSink` bounds attempts, not elapsed time. `MaxTries uint` counts total attempts including the first; defaults are `InitialInterval` 100ms, `MaxInterval` 1s, `MaxTries` 3. The old `MaxElapsedTime: -1` default (zero retries) is dropped. backoff upgrades v4.3.0 → v7.0.0 in Task 3, whose `WithMaxTries` is already total-attempt semantics.
 - This is a breaking library change. Consuming services are not updated by this plan.
 
 ---
@@ -344,7 +344,10 @@ git commit -m "refactor: replace Transport with Sink and Source"
 
 Retry is a property of the transport, not a delivery strategy. `RetryingNotifier` becomes a `Sink` decorator that returns an error instead of swallowing it, bounds attempts via `MaxTries` instead of a wall-clock ceiling, and honors context cancellation.
 
+This also upgrades backoff v4.3.0 → v7.0.0. v7's `WithMaxTries` counts total attempts, so `MaxTries` needs no conversion, and `Retry` takes `ctx` as its first argument — the current code passes no context, so a cancelled request keeps retrying. `ext/retrying_notifier.go` is the only file in ember importing backoff, and v7 requires go 1.23 against ember's 1.26.3.
+
 **Files:**
+- Modify: `go.mod`, `go.sum` (backoff v4 → v7)
 - Create: `ext/retrying_sink.go`
 - Create: `ext/mocks_test.go`
 - Create: `ext/retrying_sink_test.go`
@@ -352,7 +355,7 @@ Retry is a property of the transport, not a delivery strategy. `RetryingNotifier
 
 **Interfaces:**
 - Consumes: `ember.Sink` from Task 2.
-- Produces: `ext.RetryingSinkConfig` struct with fields `InitialInterval time.Duration`, `MaxInterval time.Duration`, `MaxTries uint64`; `ext.NewRetryingSink(c RetryingSinkConfig, s ember.Sink, l ember.LoggerCtx) *ext.RetryingSink` with method `Publish(ctx context.Context, envelopes []ember.EventEnvelope) error`.
+- Produces: `ext.RetryingSinkConfig` struct with fields `InitialInterval time.Duration`, `MaxInterval time.Duration`, `MaxTries uint`; `ext.NewRetryingSink(c RetryingSinkConfig, s ember.Sink, l ember.LoggerCtx) *ext.RetryingSink` with method `Publish(ctx context.Context, envelopes []ember.EventEnvelope) error`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -401,6 +404,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cenkalti/backoff/v7"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 
@@ -417,7 +421,7 @@ func envelopes() []ember.EventEnvelope {
 }
 
 // fastConfig keeps waits sub-millisecond so exhaustion tests stay quick.
-func fastConfig(tries uint64) RetryingSinkConfig {
+func fastConfig(tries uint) RetryingSinkConfig {
 	return RetryingSinkConfig{
 		InitialInterval: time.Millisecond,
 		MaxInterval:     time.Millisecond,
@@ -476,7 +480,8 @@ func (s *RetryingSinkSuite) TestPublishStopsAtMaxTries() {
 
 	err := r.Publish(s.ctx, envs)
 
-	s.Require().ErrorIs(err, sinkErr)
+	s.Require().ErrorIs(err, sinkErr, "the sink error stays in the chain via RetryError.LastErr")
+	s.Require().ErrorIs(err, backoff.ErrExhausted)
 	s.sink.AssertNumberOfCalls(s.T(), "Publish", 3)
 	logger.AssertExpectations(s.T())
 }
@@ -502,7 +507,7 @@ func (s *RetryingSinkSuite) TestPublishStopsOnContextCancel() {
 
 	err := r.Publish(ctx, envs)
 
-	s.Require().Error(err)
+	s.Require().ErrorIs(err, context.Canceled)
 	s.sink.AssertNumberOfCalls(s.T(), "Publish", 1)
 }
 
@@ -511,7 +516,7 @@ func (s *RetryingSinkSuite) TestZeroConfigAppliesDefaults() {
 
 	s.Equal(100*time.Millisecond, r.config.InitialInterval)
 	s.Equal(time.Second, r.config.MaxInterval)
-	s.Equal(uint64(3), r.config.MaxTries)
+	s.Equal(uint(3), r.config.MaxTries)
 }
 ```
 
@@ -520,7 +525,17 @@ func (s *RetryingSinkSuite) TestZeroConfigAppliesDefaults() {
 Run: `go test ./ext/... -v`
 Expected: FAIL with `undefined: RetryingSinkConfig` and `undefined: NewRetryingSink`
 
-- [ ] **Step 3: Create RetryingSink**
+- [ ] **Step 3: Upgrade backoff to v7**
+
+Run:
+
+```bash
+go get github.com/cenkalti/backoff/v7@v7.0.0
+```
+
+Do not build yet — `ext/retrying_notifier.go` still imports v4 and is deleted in Step 5, which drops v4 from `go.mod` via `go mod tidy`.
+
+- [ ] **Step 4: Create RetryingSink**
 
 Create `ext/retrying_sink.go`:
 
@@ -532,7 +547,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v7"
 	"github.com/klemen-forstneric/ember"
 )
 
@@ -543,7 +558,7 @@ type RetryingSinkConfig struct {
 	// MaxInterval caps the delay between tries.
 	MaxInterval time.Duration
 	// MaxTries is the total number of attempts including the first. 1 disables retrying.
-	MaxTries uint64
+	MaxTries uint
 }
 
 const (
@@ -587,25 +602,27 @@ var _ ember.Sink = (*RetryingSink)(nil)
 func (r *RetryingSink) Publish(ctx context.Context, envelopes []ember.EventEnvelope) error {
 	var try int
 
-	publish := func() error {
+	publish := func() (struct{}, error) {
 		try++
-		return r.sink.Publish(ctx, envelopes)
+		return struct{}{}, r.sink.Publish(ctx, envelopes)
 	}
 
 	exp := backoff.NewExponentialBackOff()
 	exp.InitialInterval = r.config.InitialInterval
 	exp.MaxInterval = r.config.MaxInterval
-	exp.MaxElapsedTime = 0 // bounded by MaxTries, not the wall clock
-
-	// WithContext outermost so RetryNotify sees a BackOffContext and aborts on cancel.
-	b := backoff.WithContext(backoff.WithMaxRetries(exp, r.config.MaxTries-1), ctx)
 
 	notify := func(err error, delay time.Duration) {
 		r.logger.Warn(ctx, "Failed to publish events, retrying...",
 			"error", err, "try", try, "delay", delay)
 	}
 
-	if err := backoff.RetryNotify(publish, b, notify); err != nil {
+	// WithMaxElapsedTime(0) disables v7's 15-minute default; MaxTries is the only bound.
+	if _, err := backoff.Retry(ctx, publish,
+		backoff.WithBackOff(exp),
+		backoff.WithMaxTries(r.config.MaxTries),
+		backoff.WithMaxElapsedTime(0),
+		backoff.WithNotify(notify),
+	); err != nil {
 		r.logger.Error(ctx, "Failed to publish events, tries exhausted", err, "tries", try)
 		return err
 	}
@@ -622,27 +639,30 @@ func (r *RetryingSink) Publish(ctx context.Context, envelopes []ember.EventEnvel
 }
 ```
 
-- [ ] **Step 4: Delete the old notifier**
+- [ ] **Step 5: Delete the old notifier**
 
 ```bash
 git rm ext/retrying_notifier.go
+go mod tidy
 ```
 
-- [ ] **Step 5: Run tests**
+`tidy` drops `github.com/cenkalti/backoff/v4` from `go.mod` now that nothing imports it. Confirm with `grep backoff go.mod` — only `/v7` should remain.
+
+- [ ] **Step 6: Run tests**
 
 Run: `go test ./ext/... -v`
 Expected: PASS, six tests in `RetryingSinkSuite`.
 
-- [ ] **Step 6: Run the full build and suite**
+- [ ] **Step 7: Run the full build and suite**
 
 Run: `go build ./... && go test ./...`
 Expected: PASS. Nothing inside ember referenced `RetryingNotifier`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add ext/retrying_sink.go ext/retrying_sink_test.go ext/mocks_test.go ext/retrying_notifier.go
-git commit -m "refactor(ext): replace RetryingNotifier with RetryingSink"
+git add go.mod go.sum ext/retrying_sink.go ext/retrying_sink_test.go ext/mocks_test.go ext/retrying_notifier.go
+git commit -m "refactor(ext): replace RetryingNotifier with RetryingSink on backoff v7"
 ```
 
 ---
