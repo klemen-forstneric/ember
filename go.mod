@@ -3,6 +3,7 @@ module github.com/klemen-forstneric/ember
 go 1.26.3
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/apache/pulsar-client-go v0.19.0
@@ -22,7 +23,6 @@ require (
 
 require (
 	github.com/AthenZ/athenz v1.12.13 // indirect
-	github.com/DATA-DOG/go-sqlmock v1.5.2 // indirect
 	github.com/DataDog/zstd v1.5.0 // indirect
 	github.com/RoaringBitmap/roaring/v2 v2.8.0 // indirect
 	github.com/ardielle/ardielle-go v1.5.2 // indirect

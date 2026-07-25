@@ -55,9 +55,18 @@ func (t *Transactor) WithinTx(ctx context.Context, fn func(ctx context.Context) 
 	if err != nil {
 		return err
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 	if err := fn(ctxWithTx(ctx, tx)); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
