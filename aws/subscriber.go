@@ -24,6 +24,8 @@ type SubscriberConfig struct {
 	WaitTime                 int32
 }
 
+var _ ember.Source = (*Subscriber)(nil)
+
 type Subscriber struct {
 	cfg    SubscriberConfig
 	client sqsClient

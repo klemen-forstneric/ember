@@ -10,7 +10,6 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/klemen-forstneric/ember"
-	"github.com/klemen-forstneric/ember/middleware"
 )
 
 // releaseScript deletes the key only if it still holds our token, so a holder
@@ -32,7 +31,7 @@ func NewLocker(client redis.Cmdable) *Locker {
 	return &Locker{client: client}
 }
 
-func (l *Locker) TryLock(ctx context.Context, key string, ttl time.Duration) (middleware.Lock, error) {
+func (l *Locker) TryLock(ctx context.Context, key string, ttl time.Duration) (ember.Lock, error) {
 	current, err := l.token()
 	if err != nil {
 		return nil, err

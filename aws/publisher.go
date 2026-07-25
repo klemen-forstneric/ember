@@ -69,3 +69,5 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 
 	return nil
 }
+
+var _ ember.Sink = (*Publisher)(nil)
