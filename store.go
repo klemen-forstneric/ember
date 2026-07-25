@@ -8,12 +8,12 @@ type EntityStore[E Entity] struct {
 	saver  *EntitySaver
 }
 
-func NewEntityStore[E Entity](r EntityRepository, m EntityMarshaler[E], ev *EventStore, tx Transactor) *EntityStore[E] {
+func NewEntityStore[E Entity](r EntityRepository, m EntityMarshaler[E], p *Publisher, tx Transactor) *EntityStore[E] {
 	b := Bind[E](r, m)
 
 	return &EntityStore[E]{
 		loader: NewEntityLoader(b),
-		saver:  NewEntitySaver(ev, tx, b),
+		saver:  NewEntitySaver(p, tx, b),
 	}
 }
 

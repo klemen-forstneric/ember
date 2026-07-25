@@ -130,6 +130,20 @@ func (m *mockSink) Publish(ctx context.Context, envelopes []EventEnvelope) error
 	return m.Called(ctx, envelopes).Error(0)
 }
 
+// recordingTransactor marks the commit boundary so tests can assert that a
+// deferred delivery runs after it, which a mock's call order cannot express.
+type recordingTransactor struct {
+	committed bool
+}
+
+func (t *recordingTransactor) WithinTx(ctx context.Context, fn func(context.Context) error) error {
+	if err := fn(ctx); err != nil {
+		return err
+	}
+	t.committed = true
+	return nil
+}
+
 // mockLocker is a testify mock for Locker.
 type mockLocker struct {
 	mock.Mock

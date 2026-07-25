@@ -58,7 +58,7 @@ type ReceivedEvent struct {
 	Timestamp time.Time
 }
 
-// envelopeBuilder stamps events into envelopes; shared by EventStore and Publisher.
+// envelopeBuilder stamps events into envelopes.
 type envelopeBuilder struct {
 	ider      IDer
 	metadata  MetadataGetter
@@ -86,29 +86,4 @@ func (b envelopeBuilder) build(ctx context.Context, events ...Event) ([]EventEnv
 		})
 	}
 	return envelopes, nil
-}
-
-// EventStore persists event envelopes to the repository; it never delivers.
-type EventStore struct {
-	builder    envelopeBuilder
-	repository EventRepository
-}
-
-func NewEventStore(i IDer, r EventRepository, mg MetadataGetter, m EventMarshaler) *EventStore {
-	return &EventStore{
-		builder:    envelopeBuilder{ider: i, metadata: mg, marshaler: m},
-		repository: r,
-	}
-}
-
-func (s *EventStore) Save(ctx context.Context, events ...Event) error {
-	if len(events) == 0 {
-		return nil
-	}
-
-	envelopes, err := s.builder.build(ctx, events...)
-	if err != nil {
-		return err
-	}
-	return s.repository.Save(ctx, envelopes)
 }

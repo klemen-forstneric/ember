@@ -12,18 +12,18 @@ var (
 
 // EntitySaver
 type EntitySaver struct {
-	bindings map[string]binding
-	events   *EventStore
-	tx       Transactor
+	bindings  map[string]binding
+	publisher *Publisher
+	tx        Transactor
 }
 
-func NewEntitySaver(ev *EventStore, tx Transactor, bindings ...binder) *EntitySaver {
+func NewEntitySaver(p *Publisher, tx Transactor, bindings ...binder) *EntitySaver {
 	m := make(map[string]binding, len(bindings))
 	for _, b := range bindings {
 		bd := b.binding()
 		m[bd.typ] = bd
 	}
-	return &EntitySaver{bindings: m, events: ev, tx: tx}
+	return &EntitySaver{bindings: m, publisher: p, tx: tx}
 }
 
 func (s *EntitySaver) Save(ctx context.Context, es ...Entity) error {
@@ -41,10 +41,14 @@ func (s *EntitySaver) Save(ctx context.Context, es ...Entity) error {
 		v Version
 	}
 
-	var saved []entities
+	var (
+		saved   []entities
+		deliver delivery
+	)
 
 	fn := func(ctx context.Context) error {
 		saved = nil
+		deliver = nil
 
 		for _, e := range es {
 			v, err := s.save(ctx, e)
@@ -55,7 +59,9 @@ func (s *EntitySaver) Save(ctx context.Context, es ...Entity) error {
 			saved = append(saved, entities{e: e, v: v})
 		}
 
-		return s.events.Save(ctx, events...)
+		var err error
+		deliver, err = s.publisher.stage(ctx, events...)
+		return err
 	}
 
 	var err error
@@ -74,6 +80,12 @@ func (s *EntitySaver) Save(ctx context.Context, es ...Entity) error {
 		p.e.events().Clear()
 	}
 
+	if deliver == nil {
+		return nil
+	}
+	if err := deliver(context.WithoutCancel(ctx)); err != nil {
+		return fmt.Errorf("%w: %w", ErrDeliveryFailed, err)
+	}
 	return nil
 }
 

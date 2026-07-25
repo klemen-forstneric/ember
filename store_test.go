@@ -28,8 +28,8 @@ func (s *EntityStoreSuite) SetupTest() {
 	s.eventRepo = &mockEventRepository{}
 	s.eventMarsh = &mockEventMarshaler{}
 	s.tx = &mockTransactor{}
-	events := NewEventStore(stubIDer{id: "evt-1"}, s.eventRepo, NoopMetadataGetter{}, s.eventMarsh)
-	s.store = NewEntityStore[*fakeEntity](s.repo, s.marshaler, events, s.tx)
+	publisher := AtLeastOnce(stubIDer{id: "evt-1"}, s.eventRepo, NoopMetadataGetter{}, s.eventMarsh)
+	s.store = NewEntityStore[*fakeEntity](s.repo, s.marshaler, publisher, s.tx)
 }
 
 func (s *EntityStoreSuite) TearDownTest() {

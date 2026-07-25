@@ -16,6 +16,7 @@ type EntitySaverSuite struct {
 	entityMarsh *mockEntityMarshaler[*fakeEntity]
 	eventRepo   *mockEventRepository
 	eventMarsh  *mockEventMarshaler
+	sink        *mockSink
 	tx          *mockTransactor
 	saver       *EntitySaver
 }
@@ -28,9 +29,10 @@ func (s *EntitySaverSuite) SetupTest() {
 	s.entityMarsh = &mockEntityMarshaler[*fakeEntity]{}
 	s.eventRepo = &mockEventRepository{}
 	s.eventMarsh = &mockEventMarshaler{}
+	s.sink = &mockSink{}
 	s.tx = &mockTransactor{}
-	events := NewEventStore(stubIDer{id: "evt-1"}, s.eventRepo, NoopMetadataGetter{}, s.eventMarsh)
-	s.saver = NewEntitySaver(events, s.tx, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
+	publisher := AtLeastOnce(stubIDer{id: "evt-1"}, s.eventRepo, NoopMetadataGetter{}, s.eventMarsh)
+	s.saver = NewEntitySaver(publisher, s.tx, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
 }
 
 func (s *EntitySaverSuite) TearDownTest() {
@@ -38,6 +40,7 @@ func (s *EntitySaverSuite) TearDownTest() {
 	s.entityMarsh.AssertExpectations(s.T())
 	s.eventRepo.AssertExpectations(s.T())
 	s.eventMarsh.AssertExpectations(s.T())
+	s.sink.AssertExpectations(s.T())
 	s.tx.AssertExpectations(s.T())
 }
 
@@ -140,8 +143,8 @@ func (s *EntitySaverSuite) TestSaveCommitErrorLeavesEntityUntouched() {
 func (s *EntitySaverSuite) TestSaveTwoTypesOneTx() {
 	repo2 := &mockEntityRepository{}
 	marsh2 := &mockEntityMarshaler[*fakeEntity2]{}
-	events := NewEventStore(stubIDer{id: "evt-1"}, s.eventRepo, NoopMetadataGetter{}, s.eventMarsh)
-	saver := NewEntitySaver(events, s.tx,
+	publisher := AtLeastOnce(stubIDer{id: "evt-1"}, s.eventRepo, NoopMetadataGetter{}, s.eventMarsh)
+	saver := NewEntitySaver(publisher, s.tx,
 		Bind[*fakeEntity](s.entityRepo, s.entityMarsh),
 		Bind[*fakeEntity2](repo2, marsh2),
 	)
@@ -167,4 +170,51 @@ func (s *EntitySaverSuite) TestSaveTwoTypesOneTx() {
 	s.Equal(uint64(1), e2.Version().Value())
 	repo2.AssertExpectations(s.T())
 	marsh2.AssertExpectations(s.T())
+}
+
+func (s *EntitySaverSuite) TestBestEffortDeliversAfterCommit() {
+	tx := &recordingTransactor{}
+	publisher := BestEffort(stubIDer{id: "evt-1"}, s.sink, NoopMetadataGetter{}, s.eventMarsh)
+	saver := NewEntitySaver(publisher, tx, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
+
+	e := newFakeEntity("1")
+	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
+	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
+	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
+	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
+		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once().
+		Run(func(mock.Arguments) {
+			s.True(tx.committed, "delivery must run after commit")
+		})
+
+	err := saver.Save(s.ctx, e)
+
+	s.Require().NoError(err)
+	s.Empty(e.events().All())
+	s.Equal(uint64(1), e.Version().Value())
+	// eventRepo is never touched under BestEffort — asserted by TearDownTest.
+}
+
+func (s *EntitySaverSuite) TestBestEffortDeliveryFailureStillAdvancesEntity() {
+	tx := &recordingTransactor{}
+	publisher := BestEffort(stubIDer{id: "evt-1"}, s.sink, NoopMetadataGetter{}, s.eventMarsh)
+	saver := NewEntitySaver(publisher, tx, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
+
+	e := newFakeEntity("1")
+	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
+	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
+	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
+	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
+		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(errors.New("broker down")).Once()
+
+	err := saver.Save(s.ctx, e)
+
+	s.Require().ErrorIs(err, ErrDeliveryFailed)
+	// State committed, so the entity must match durable state regardless.
+	s.Equal(uint64(1), e.Version().Value())
+	s.Empty(e.events().All())
 }

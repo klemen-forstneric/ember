@@ -11,7 +11,7 @@ import (
 )
 
 // EventRepository stores events in an outbox table. Save is called by
-// ember.EventStore (inside a transaction); ListUnpublished/MarkPublished are
+// the Publisher (inside a transaction); ListUnpublished/MarkPublished are
 // driven by a relay.
 type EventRepository struct {
 	db    *DB
