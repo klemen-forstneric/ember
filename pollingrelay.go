@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// RelayConfig
-type RelayConfig struct {
+// PollingRelayConfig
+type PollingRelayConfig struct {
 	IdleInterval time.Duration // idle poll cadence (jittered per replica)
 	BatchSize    int           // events fetched per round
 	LockKey      string        // redis efficiency-lock key
@@ -26,10 +26,10 @@ const (
 	defaultRetention    = 7 * 24 * time.Hour
 )
 
-// DefaultRelayConfig returns a RelayConfig with sensible defaults. key must be
-// unique per service and shared by that service's replicas.
-func DefaultRelayConfig(key string) RelayConfig {
-	return RelayConfig{
+// DefaultPollingRelayConfig returns a PollingRelayConfig with sensible defaults.
+// key must be unique per service and shared by that service's replicas.
+func DefaultPollingRelayConfig(key string) PollingRelayConfig {
+	return PollingRelayConfig{
 		IdleInterval: defaultIdleInterval,
 		BatchSize:    defaultBatchSize,
 		LockKey:      key,
@@ -41,7 +41,7 @@ func DefaultRelayConfig(key string) RelayConfig {
 // ErrInvalidRelayConfig is returned by NewRelay when cfg fails validation.
 var ErrInvalidRelayConfig = errors.New("ember: invalid relay config")
 
-func validateRelayConfig(cfg RelayConfig) error {
+func validateRelayConfig(cfg PollingRelayConfig) error {
 	switch {
 	case cfg.LockKey == "":
 		return fmt.Errorf("%w: LockKey must not be empty", ErrInvalidRelayConfig)
@@ -59,19 +59,19 @@ func validateRelayConfig(cfg RelayConfig) error {
 	return nil
 }
 
-// Relay drains the outbox to the Sink. It is the sole publisher under the
+// PollingRelay drains the outbox to the Sink. It is the sole publisher under the
 // AtLeastOnce guarantee.
-type Relay struct {
+type PollingRelay struct {
 	repository EventRepository
 	sink       Sink
 	locker     Locker
 	logger     LoggerCtx
-	cfg        RelayConfig
+	cfg        PollingRelayConfig
 	done       chan struct{}
 	closeOnce  sync.Once
 }
 
-func NewRelay(r EventRepository, s Sink, l Locker, log LoggerCtx, cfg RelayConfig) (*Relay, error) {
+func NewRelay(r EventRepository, s Sink, l Locker, log LoggerCtx, cfg PollingRelayConfig) (*PollingRelay, error) {
 	if err := validateRelayConfig(cfg); err != nil {
 		return nil, err
 	}
@@ -79,7 +79,7 @@ func NewRelay(r EventRepository, s Sink, l Locker, log LoggerCtx, cfg RelayConfi
 		log = NopLogger
 	}
 
-	return &Relay{
+	return &PollingRelay{
 		repository: r,
 		sink:       s,
 		locker:     l,
@@ -106,24 +106,23 @@ func groupByEntity(events []EventEnvelope) [][]EventEnvelope {
 	return groups
 }
 
-func (r *Relay) publishBatch(ctx context.Context) (int, error) {
+func (r *PollingRelay) publish(ctx context.Context) (int, error) {
 	events, err := r.repository.ListUnpublished(ctx, r.cfg.BatchSize)
 	if err != nil {
 		return 0, err
 	}
 
-	published := make([]string, 0, len(events))
-	for _, group := range groupByEntity(events) {
-		if err := r.sink.Publish(ctx, group); err != nil {
-			e := group[0]
+	ids := make([]string, 0, len(events))
+
+	for _, g := range groupByEntity(events) {
+		if err := r.sink.Publish(ctx, g); err != nil {
 			r.logger.Warn(ctx, "Failed to publish events, will retry",
-				"error", err, "eventId", e.ID, "type", e.Event.Type, "entity_id", e.EntityID,
-				"events", len(group))
+				"error", err, "entity_id", g[0].EntityID, "events", len(g))
 			continue
 		}
 
-		for _, e := range group {
-			published = append(published, e.ID)
+		for _, e := range g {
+			ids = append(ids, e.ID)
 
 			elapsed := time.Since(e.Timestamp)
 			r.logger.Info(ctx, "Published event", "eventId", e.ID, "type", e.Event.Type,
@@ -133,16 +132,19 @@ func (r *Relay) publishBatch(ctx context.Context) (int, error) {
 		}
 	}
 
-	if len(published) > 0 {
-		expiresAt := time.Now().UTC().Add(r.cfg.Retention)
-		if err := r.repository.MarkPublished(ctx, published, expiresAt); err != nil {
-			return len(published), err
-		}
+	if len(ids) == 0 {
+		return 0, nil
 	}
-	return len(published), nil
+
+	expiresAt := time.Now().UTC().Add(r.cfg.Retention)
+	if err := r.repository.MarkPublished(ctx, ids, expiresAt); err != nil {
+		return 0, err
+	}
+
+	return len(ids), nil
 }
 
-func (r *Relay) tick(ctx context.Context) {
+func (r *PollingRelay) tick(ctx context.Context) {
 	lock, err := r.locker.TryLock(ctx, r.cfg.LockKey, r.cfg.LockTTL)
 	if err != nil {
 		r.logger.Error(ctx, "Failed to acquire outbox lock", err, "key", r.cfg.LockKey)
@@ -162,7 +164,7 @@ func (r *Relay) tick(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		published, err := r.publishBatch(ctx)
+		published, err := r.publish(ctx)
 		if err != nil {
 			r.logger.Error(ctx, "Failed to drain outbox batch", err)
 			return
@@ -173,7 +175,7 @@ func (r *Relay) tick(ctx context.Context) {
 	}
 }
 
-func (r *Relay) Run(ctx context.Context) {
+func (r *PollingRelay) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -193,11 +195,11 @@ func (r *Relay) Run(ctx context.Context) {
 	}
 }
 
-func (r *Relay) interval() time.Duration {
+func (r *PollingRelay) interval() time.Duration {
 	return r.cfg.IdleInterval + time.Duration(rand.Int64N(int64(r.cfg.IdleInterval)))
 }
 
-func (r *Relay) Close() error {
+func (r *PollingRelay) Close() error {
 	r.closeOnce.Do(func() { close(r.done) })
 	return nil
 }
