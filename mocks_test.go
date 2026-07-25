@@ -2,6 +2,7 @@ package ember
 
 import (
 	"context"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 )
@@ -65,6 +66,19 @@ func (m *mockEventRepository) Save(ctx context.Context, envelopes []EventEnvelop
 	return m.Called(ctx, envelopes).Error(0)
 }
 
+func (m *mockEventRepository) ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error) {
+	args := m.Called(ctx, limit)
+	var envs []EventEnvelope
+	if v := args.Get(0); v != nil {
+		envs = v.([]EventEnvelope)
+	}
+	return envs, args.Error(1)
+}
+
+func (m *mockEventRepository) MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error {
+	return m.Called(ctx, ids, expiresAt).Error(0)
+}
+
 // mockEventMarshaler is a testify mock for EventMarshaler.
 type mockEventMarshaler struct {
 	mock.Mock
@@ -105,4 +119,50 @@ func (m *mockTransactor) WithinTx(ctx context.Context, fn func(context.Context) 
 		return err
 	}
 	return args.Error(0)
+}
+
+// mockSink is a testify mock for Sink.
+type mockSink struct {
+	mock.Mock
+}
+
+func (m *mockSink) Publish(ctx context.Context, envelopes []EventEnvelope) error {
+	return m.Called(ctx, envelopes).Error(0)
+}
+
+// mockLocker is a testify mock for Locker.
+type mockLocker struct {
+	mock.Mock
+}
+
+func (m *mockLocker) TryLock(ctx context.Context, key string, ttl time.Duration) (Lock, error) {
+	args := m.Called(ctx, key, ttl)
+	var lock Lock
+	if v := args.Get(0); v != nil {
+		lock = v.(Lock)
+	}
+	return lock, args.Error(1)
+}
+
+// mockLock is a testify mock for Lock.
+type mockLock struct {
+	mock.Mock
+}
+
+func (m *mockLock) Release(ctx context.Context) error { return m.Called(ctx).Error(0) }
+
+// mockLogger records level+msg per call so tests can assert logging without
+// pinning down every variadic kv.
+type mockLogger struct {
+	mock.Mock
+}
+
+func (m *mockLogger) Debug(ctx context.Context, msg string, kvs ...interface{}) { m.Called(msg) }
+
+func (m *mockLogger) Info(ctx context.Context, msg string, kvs ...interface{}) { m.Called(msg) }
+
+func (m *mockLogger) Warn(ctx context.Context, msg string, kvs ...interface{}) { m.Called(msg) }
+
+func (m *mockLogger) Error(ctx context.Context, msg string, err error, kvs ...interface{}) {
+	m.Called(msg, err)
 }

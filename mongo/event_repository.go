@@ -13,7 +13,7 @@ import (
 
 // EventRepository stores events in an outbox collection. Save is called by
 // ember.Publisher (inside a transaction); ListUnpublished/MarkPublished are
-// driven by the relay (mongo.Notifier).
+// driven by the relay (ember.Relay).
 type EventRepository struct {
 	collection *mongo.Collection
 }

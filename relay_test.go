@@ -1,4 +1,4 @@
-package mongo
+package ember
 
 import (
 	"context"
@@ -8,21 +8,19 @@ import (
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
-
-	"github.com/klemen-forstneric/ember"
 )
 
-func evt(id, entityID string) ember.EventEnvelope {
-	return ember.EventEnvelope{
+func evt(id, entityID string) EventEnvelope {
+	return EventEnvelope{
 		ID:        id,
 		EntityID:  entityID,
-		Event:     &ember.MarshaledEvent{Type: "T", Data: []byte("{}")},
+		Event:     &MarshaledEvent{Type: "T", Data: []byte("{}")},
 		Timestamp: time.Unix(0, 1).UTC(),
 	}
 }
 
-func testConfig() NotifierConfig {
-	return NotifierConfig{
+func testRelayConfig() RelayConfig {
+	return RelayConfig{
 		IdleInterval: time.Millisecond,
 		BatchSize:    10,
 		LockKey:      "outbox:test",
@@ -31,37 +29,37 @@ func testConfig() NotifierConfig {
 	}
 }
 
-type NotifierSuite struct {
+type RelaySuite struct {
 	suite.Suite
 	repository *mockEventRepository
 	sink       *mockSink
 	locker     *mockLocker
-	n          *Notifier
+	r          *Relay
 }
 
-func TestNotifierSuite(t *testing.T) {
-	suite.Run(t, new(NotifierSuite))
+func TestRelaySuite(t *testing.T) {
+	suite.Run(t, new(RelaySuite))
 }
 
-func (s *NotifierSuite) SetupTest() {
+func (s *RelaySuite) SetupTest() {
 	s.repository = &mockEventRepository{}
 	s.sink = &mockSink{}
 	s.locker = &mockLocker{}
-	s.n = NewNotifier(s.repository, s.sink, s.locker, ember.NopLogger, testConfig())
+	s.r = NewRelay(s.repository, s.sink, s.locker, NopLogger, testRelayConfig())
 }
 
-func (s *NotifierSuite) TestPublishBatchPublishesInOrderAndMarks() {
-	batch := []ember.EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "B")}
+func (s *RelaySuite) TestPublishBatchPublishesInOrderAndMarks() {
+	batch := []EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "B")}
 	s.repository.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
 
 	var order []string
 	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Run(func(a mock.Arguments) {
-		envs := a.Get(1).([]ember.EventEnvelope)
+		envs := a.Get(1).([]EventEnvelope)
 		order = append(order, envs[0].ID)
 	})
 	s.repository.On("MarkPublished", mock.Anything, []string{"e1", "e2", "e3"}, mock.Anything).Return(nil).Once()
 
-	published, err := s.n.publishBatch(context.Background())
+	published, err := s.r.publishBatch(context.Background())
 
 	s.Require().NoError(err)
 	s.Equal(3, published)
@@ -69,97 +67,93 @@ func (s *NotifierSuite) TestPublishBatchPublishesInOrderAndMarks() {
 	s.repository.AssertExpectations(s.T())
 }
 
-func (s *NotifierSuite) TestPublishBatchPerEntityHeadOfLine() {
+func (s *RelaySuite) TestPublishBatchPerEntityHeadOfLine() {
 	// Seq order: A/e1, A/e2, B/e3. A/e1 fails → A/e2 must be skipped; B/e3 proceeds.
-	batch := []ember.EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "B")}
+	batch := []EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "B")}
 	s.repository.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
 
-	s.sink.On("Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
+	s.sink.On("Publish", mock.Anything, mock.MatchedBy(func(e []EventEnvelope) bool {
 		return e[0].ID == "e1"
 	})).Return(errors.New("route fail"))
-	s.sink.On("Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
+	s.sink.On("Publish", mock.Anything, mock.MatchedBy(func(e []EventEnvelope) bool {
 		return e[0].ID == "e3"
 	})).Return(nil)
 	// Only e3 is marked; e1 (failed) and e2 (blocked behind e1) stay pending.
 	s.repository.On("MarkPublished", mock.Anything, []string{"e3"}, mock.Anything).Return(nil).Once()
 
-	published, err := s.n.publishBatch(context.Background())
+	published, err := s.r.publishBatch(context.Background())
 
 	s.Require().NoError(err)
 	s.Equal(1, published)
-	s.sink.AssertNotCalled(s.T(), "Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
+	s.sink.AssertNotCalled(s.T(), "Publish", mock.Anything, mock.MatchedBy(func(e []EventEnvelope) bool {
 		return e[0].ID == "e2"
 	}))
 	s.repository.AssertExpectations(s.T())
 }
 
-func (s *NotifierSuite) TestPublishBatchLogsPublishedAndRetry() {
-	batch := []ember.EventEnvelope{evt("e1", "A"), evt("e2", "B")}
+func (s *RelaySuite) TestPublishBatchLogsPublishedAndRetry() {
+	batch := []EventEnvelope{evt("e1", "A"), evt("e2", "B")}
 	s.repository.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
 
-	s.sink.On("Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
+	s.sink.On("Publish", mock.Anything, mock.MatchedBy(func(e []EventEnvelope) bool {
 		return e[0].ID == "e1"
 	})).Return(nil)
-	s.sink.On("Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
+	s.sink.On("Publish", mock.Anything, mock.MatchedBy(func(e []EventEnvelope) bool {
 		return e[0].ID == "e2"
-	})).Return(errors.New("transport down"))
+	})).Return(errors.New("sink down"))
 	s.repository.On("MarkPublished", mock.Anything, []string{"e1"}, mock.Anything).Return(nil).Once()
 
 	logger := &mockLogger{}
 	logger.On("Info", "Published event").Once()
 	logger.On("Warn", "Failed to publish event, will retry").Once()
-	s.n = NewNotifier(s.repository, s.sink, s.locker, logger, testConfig())
+	s.r = NewRelay(s.repository, s.sink, s.locker, logger, testRelayConfig())
 
-	published, err := s.n.publishBatch(context.Background())
+	published, err := s.r.publishBatch(context.Background())
 
 	s.Require().NoError(err)
 	s.Equal(1, published)
 	logger.AssertExpectations(s.T())
 }
 
-func (s *NotifierSuite) TestNotifyIsNoOp() {
-	s.NotPanics(func() { s.n.Notify(context.Background(), []ember.EventEnvelope{evt("e1", "A")}) })
-}
-
-func (s *NotifierSuite) TestTickNotLeaderDoesNothing() {
+func (s *RelaySuite) TestTickNotLeaderDoesNothing() {
 	// nil lock → someone else is leader this round.
 	s.locker.On("TryLock", mock.Anything, "outbox:test", time.Minute).Return(nil, nil).Once()
 
-	s.n.tick(context.Background())
+	s.r.tick(context.Background())
 
 	s.repository.AssertNotCalled(s.T(), "ListUnpublished", mock.Anything, mock.Anything)
 	s.locker.AssertExpectations(s.T())
 }
 
-func (s *NotifierSuite) TestTickDrainsWhileFullBatch() {
+func (s *RelaySuite) TestTickDrainsWhileFullBatch() {
 	lock := &mockLock{}
 	s.locker.On("TryLock", mock.Anything, "outbox:test", time.Minute).Return(lock, nil).Once()
 	lock.On("Release", mock.Anything).Return(nil).Once()
 
 	// cfg.BatchSize is 10. First batch: 10 events (all published) → drain again.
 	// Second batch: empty → stop.
-	full := make([]ember.EventEnvelope, 10)
+	full := make([]EventEnvelope, 10)
 	for i := range full {
 		full[i] = evt("full", "A")
 	}
 	s.repository.On("ListUnpublished", mock.Anything, 10).Return(full, nil).Once()
-	s.repository.On("ListUnpublished", mock.Anything, 10).Return([]ember.EventEnvelope{}, nil).Once()
+	s.repository.On("ListUnpublished", mock.Anything, 10).Return([]EventEnvelope{}, nil).Once()
 	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil)
 	s.repository.On("MarkPublished", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
-	s.n.tick(context.Background())
+	s.r.tick(context.Background())
 
 	s.repository.AssertNumberOfCalls(s.T(), "ListUnpublished", 2)
 	lock.AssertExpectations(s.T())
 }
 
-func (s *NotifierSuite) TestRunStopsOnContextCancel() {
+func (s *RelaySuite) TestRunStopsOnContextCancel() {
 	// Always not-leader so ticks are cheap; Run must still exit on cancel.
 	s.locker.On("TryLock", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { s.n.Run(ctx); close(done) }()
+	go func() { s.r.Run(ctx); close(done) }()
 
 	cancel()
 	select {
@@ -169,14 +163,14 @@ func (s *NotifierSuite) TestRunStopsOnContextCancel() {
 	}
 }
 
-func (s *NotifierSuite) TestRunStopsOnClose() {
+func (s *RelaySuite) TestRunStopsOnClose() {
 	// Always not-leader so ticks are cheap; Run must exit once Close is called.
 	s.locker.On("TryLock", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil)
 
 	done := make(chan struct{})
-	go func() { s.n.Run(context.Background()); close(done) }()
+	go func() { s.r.Run(context.Background()); close(done) }()
 
-	s.Require().NoError(s.n.Close())
+	s.Require().NoError(s.r.Close())
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -184,9 +178,9 @@ func (s *NotifierSuite) TestRunStopsOnClose() {
 	}
 }
 
-func (s *NotifierSuite) TestCloseIsIdempotent() {
+func (s *RelaySuite) TestCloseIsIdempotent() {
 	s.NotPanics(func() {
-		s.NoError(s.n.Close())
-		s.NoError(s.n.Close())
+		s.NoError(s.r.Close())
+		s.NoError(s.r.Close())
 	})
 }
