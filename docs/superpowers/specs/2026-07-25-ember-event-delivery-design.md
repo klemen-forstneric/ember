@@ -371,9 +371,41 @@ which is inherent to immediate delivery and documented rather than prevented.
   notifier. ember's `EventRepository` is an outbox with TTL retention, so a log mode means
   retention policy, replay, and no TTL. A different feature, not a delivery guarantee.
 
-## Open decisions
+## RetryingSink bounds tries, not elapsed time
 
-1. **`ext.RetryingSink` default.** `MaxElapsedTime` currently defaults to `-1`, which in
-   backoff/v4 stops before the first retry — a type called "Retrying" that does not retry
-   unless configured. Now that the error reaches `Publish`, it should get a real default
-   rather than a silent zero.
+`MaxElapsedTime` defaulting to `-1` meant backoff/v4 stopped before the first retry — a type
+called "Retrying" that did not retry unless configured. The replacement bounds attempts:
+
+```go
+type RetryingSinkConfig struct {
+    InitialInterval time.Duration // default 100ms
+    MaxInterval     time.Duration // default 1s
+    MaxTries        uint64        // total attempts including the first; default 3, 1 disables retrying
+}
+```
+
+Tries rather than retries, because "3 retries" invites an off-by-one at every call site.
+`MaxTries` maps to `backoff.WithMaxRetries(b, MaxTries-1)` in one place, and `MaxElapsedTime`
+is set to `0` so the try count is the only bound.
+
+The default of 3 tries is short on purpose. `Publish` blocks its caller — a command handler on
+path A, or `EntitySaver` immediately after commit on path B — so with the default intervals
+the worst case is roughly 100ms + 150ms of waiting. A multi-second ceiling would hang a
+request through a broker outage.
+
+Retries also now honor cancellation. The current code calls
+`backoff.RetryNotify(publish, b, notify)` with no context, so a cancelled request keeps
+retrying. `backoff.WithContext` goes **outermost** —
+`backoff.WithContext(backoff.WithMaxRetries(exp, n), ctx)` — so `RetryNotify` sees a
+`BackOffContext` regardless of how v4 unwraps nested back-offs.
+
+`RetryingSink` is for `BestEffort`. Wrapping the relay's `Sink` is a mistake worth documenting:
+the retry runs inline in `publishBatch` while the redis lock is held, so a retry window
+approaching `LockTTL` lets the lock expire mid-round and a second replica start draining —
+duplicates and reordering. The relay's own retry is leaving the event unpublished until the
+next tick, which never blocks the drain. Sub-second bounds keep this unreachable in practice.
+
+Staying on backoff/v4: v7 offers `WithMaxTries` natively and takes `ctx` as its first
+argument, but its docs and its `Retry` implementation disagree on whether a failed operation
+returns raw or wrapped in `*RetryError`, which decides whether `errors.Is(err, sinkErr)` and
+the `ErrDeliveryFailed` chain survive. That upgrade is its own change.

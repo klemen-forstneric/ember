@@ -18,7 +18,7 @@
 - Keep comments minimal — a terse one-liner only where the code is genuinely non-obvious. No paragraph rationale blocks.
 - Conventional Commits for every commit message.
 - **Resolved open decision 1:** there is one outbox interface. `EventRepository` grows `ListUnpublished` and `MarkPublished` instead of gaining a sibling, so `AtLeastOnce` requires a drainable outbox at compile time. mongo's package-local `eventRepository` is deleted, not promoted.
-- **Resolved open decision 2:** `RetryingSink` defaults `MaxElapsedTime` to `30 * time.Second` when zero. The old `-1` default (zero retries) is dropped.
+- **Resolved open decision 2:** `RetryingSink` bounds attempts, not elapsed time. `MaxTries uint64` counts total attempts including the first; defaults are `InitialInterval` 100ms, `MaxInterval` 1s, `MaxTries` 3. The old `MaxElapsedTime: -1` default (zero retries) is dropped. Stay on `backoff/v4` — the v7 upgrade is a separate change.
 - This is a breaking library change. Consuming services are not updated by this plan.
 
 ---
@@ -342,7 +342,7 @@ git commit -m "refactor: replace Transport with Sink and Source"
 
 ### Task 3: Turn RetryingNotifier into RetryingSink
 
-Retry is a property of the transport, not a delivery strategy. `RetryingNotifier` becomes a `Sink` decorator that returns an error instead of swallowing it, and gets a `MaxElapsedTime` default that actually retries.
+Retry is a property of the transport, not a delivery strategy. `RetryingNotifier` becomes a `Sink` decorator that returns an error instead of swallowing it, bounds attempts via `MaxTries` instead of a wall-clock ceiling, and honors context cancellation.
 
 **Files:**
 - Create: `ext/retrying_sink.go`
@@ -352,7 +352,7 @@ Retry is a property of the transport, not a delivery strategy. `RetryingNotifier
 
 **Interfaces:**
 - Consumes: `ember.Sink` from Task 2.
-- Produces: `ext.RetryingSinkConfig` struct with fields `InitialInterval`, `MaxInterval`, `MaxElapsedTime` (all `time.Duration`); `ext.NewRetryingSink(c RetryingSinkConfig, s ember.Sink, l ember.LoggerCtx) *ext.RetryingSink` with method `Publish(ctx context.Context, envelopes []ember.EventEnvelope) error`.
+- Produces: `ext.RetryingSinkConfig` struct with fields `InitialInterval time.Duration`, `MaxInterval time.Duration`, `MaxTries uint64`; `ext.NewRetryingSink(c RetryingSinkConfig, s ember.Sink, l ember.LoggerCtx) *ext.RetryingSink` with method `Publish(ctx context.Context, envelopes []ember.EventEnvelope) error`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -416,12 +416,12 @@ func envelopes() []ember.EventEnvelope {
 	}}
 }
 
-// fastConfig keeps retries sub-millisecond so exhaustion tests stay quick.
-func fastConfig() RetryingSinkConfig {
+// fastConfig keeps waits sub-millisecond so exhaustion tests stay quick.
+func fastConfig(tries uint64) RetryingSinkConfig {
 	return RetryingSinkConfig{
 		InitialInterval: time.Millisecond,
 		MaxInterval:     time.Millisecond,
-		MaxElapsedTime:  10 * time.Millisecond,
+		MaxTries:        tries,
 	}
 }
 
@@ -445,7 +445,7 @@ func (s *RetryingSinkSuite) TearDownTest() {
 func (s *RetryingSinkSuite) TestPublishSucceedsWithoutRetry() {
 	envs := envelopes()
 	s.sink.On("Publish", mock.Anything, envs).Return(nil).Once()
-	r := NewRetryingSink(fastConfig(), s.sink, ember.NopLogger)
+	r := NewRetryingSink(fastConfig(3), s.sink, ember.NopLogger)
 
 	err := r.Publish(s.ctx, envs)
 
@@ -457,7 +457,7 @@ func (s *RetryingSinkSuite) TestPublishRetriesThenSucceeds() {
 	// testify consumes Once() expectations in declaration order.
 	s.sink.On("Publish", mock.Anything, envs).Return(errors.New("down")).Once()
 	s.sink.On("Publish", mock.Anything, envs).Return(nil).Once()
-	r := NewRetryingSink(fastConfig(), s.sink, ember.NopLogger)
+	r := NewRetryingSink(fastConfig(3), s.sink, ember.NopLogger)
 
 	err := r.Publish(s.ctx, envs)
 
@@ -465,24 +465,53 @@ func (s *RetryingSinkSuite) TestPublishRetriesThenSucceeds() {
 	s.sink.AssertNumberOfCalls(s.T(), "Publish", 2)
 }
 
-func (s *RetryingSinkSuite) TestPublishReturnsErrorWhenRetriesExhausted() {
+func (s *RetryingSinkSuite) TestPublishStopsAtMaxTries() {
 	envs := envelopes()
-	s.sink.On("Publish", mock.Anything, envs).Return(errors.New("down"))
+	sinkErr := errors.New("down")
+	s.sink.On("Publish", mock.Anything, envs).Return(sinkErr)
 	logger := &mockLogger{}
 	logger.On("Warn", "Failed to publish events, retrying...")
-	logger.On("Error", "Failed to publish events, retries exhausted", mock.Anything).Once()
-	r := NewRetryingSink(fastConfig(), s.sink, logger)
+	logger.On("Error", "Failed to publish events, tries exhausted", mock.Anything).Once()
+	r := NewRetryingSink(fastConfig(3), s.sink, logger)
+
+	err := r.Publish(s.ctx, envs)
+
+	s.Require().ErrorIs(err, sinkErr)
+	s.sink.AssertNumberOfCalls(s.T(), "Publish", 3)
+	logger.AssertExpectations(s.T())
+}
+
+func (s *RetryingSinkSuite) TestMaxTriesOneDisablesRetrying() {
+	envs := envelopes()
+	s.sink.On("Publish", mock.Anything, envs).Return(errors.New("down")).Once()
+	r := NewRetryingSink(fastConfig(1), s.sink, ember.NopLogger)
 
 	err := r.Publish(s.ctx, envs)
 
 	s.Require().Error(err)
-	logger.AssertExpectations(s.T())
+	s.sink.AssertNumberOfCalls(s.T(), "Publish", 1)
 }
 
-func (s *RetryingSinkSuite) TestZeroMaxElapsedTimeDefaultsToThirtySeconds() {
+func (s *RetryingSinkSuite) TestPublishStopsOnContextCancel() {
+	envs := envelopes()
+	ctx, cancel := context.WithCancel(context.Background())
+	s.sink.On("Publish", mock.Anything, envs).Return(errors.New("down")).Once().
+		Run(func(mock.Arguments) { cancel() })
+	// MaxTries of 100 would keep going for a long time if cancellation were ignored.
+	r := NewRetryingSink(fastConfig(100), s.sink, ember.NopLogger)
+
+	err := r.Publish(ctx, envs)
+
+	s.Require().Error(err)
+	s.sink.AssertNumberOfCalls(s.T(), "Publish", 1)
+}
+
+func (s *RetryingSinkSuite) TestZeroConfigAppliesDefaults() {
 	r := NewRetryingSink(RetryingSinkConfig{}, s.sink, ember.NopLogger)
 
-	s.Equal(30*time.Second, r.config.MaxElapsedTime)
+	s.Equal(100*time.Millisecond, r.config.InitialInterval)
+	s.Equal(time.Second, r.config.MaxInterval)
+	s.Equal(uint64(3), r.config.MaxTries)
 }
 ```
 
@@ -509,15 +538,23 @@ import (
 
 // RetryingSinkConfig
 type RetryingSinkConfig struct {
-	// InitialInterval is the delay for the first retry.
+	// InitialInterval is the delay before the second try.
 	InitialInterval time.Duration
-	// MaxInterval is the maximum delay between retries.
+	// MaxInterval caps the delay between tries.
 	MaxInterval time.Duration
-	// MaxElapsedTime is the time after which we stop retrying.
-	MaxElapsedTime time.Duration
+	// MaxTries is the total number of attempts including the first. 1 disables retrying.
+	MaxTries uint64
 }
 
-// RetryingSink wraps a Sink with exponential-backoff retries.
+const (
+	defaultInitialInterval = 100 * time.Millisecond
+	defaultMaxInterval     = time.Second
+	defaultMaxTries        = 3
+)
+
+// RetryingSink wraps a Sink with exponential-backoff retries. Intended for the
+// BestEffort guarantee — wrapping a Relay's Sink stalls the outbox drain while
+// its lock is held.
 type RetryingSink struct {
 	config RetryingSinkConfig
 	sink   ember.Sink
@@ -525,8 +562,14 @@ type RetryingSink struct {
 }
 
 func NewRetryingSink(c RetryingSinkConfig, s ember.Sink, l ember.LoggerCtx) *RetryingSink {
-	if c.MaxElapsedTime == 0 {
-		c.MaxElapsedTime = 30 * time.Second
+	if c.InitialInterval <= 0 {
+		c.InitialInterval = defaultInitialInterval
+	}
+	if c.MaxInterval <= 0 {
+		c.MaxInterval = defaultMaxInterval
+	}
+	if c.MaxTries == 0 {
+		c.MaxTries = defaultMaxTries
 	}
 	if l == nil {
 		l = ember.NopLogger
@@ -542,25 +585,28 @@ func NewRetryingSink(c RetryingSinkConfig, s ember.Sink, l ember.LoggerCtx) *Ret
 var _ ember.Sink = (*RetryingSink)(nil)
 
 func (r *RetryingSink) Publish(ctx context.Context, envelopes []ember.EventEnvelope) error {
-	var attempt int
+	var try int
 
 	publish := func() error {
-		attempt++
+		try++
 		return r.sink.Publish(ctx, envelopes)
 	}
 
-	b := backoff.NewExponentialBackOff()
-	b.InitialInterval = r.config.InitialInterval
-	b.MaxInterval = r.config.MaxInterval
-	b.MaxElapsedTime = r.config.MaxElapsedTime
+	exp := backoff.NewExponentialBackOff()
+	exp.InitialInterval = r.config.InitialInterval
+	exp.MaxInterval = r.config.MaxInterval
+	exp.MaxElapsedTime = 0 // bounded by MaxTries, not the wall clock
+
+	// WithContext outermost so RetryNotify sees a BackOffContext and aborts on cancel.
+	b := backoff.WithContext(backoff.WithMaxRetries(exp, r.config.MaxTries-1), ctx)
 
 	notify := func(err error, delay time.Duration) {
 		r.logger.Warn(ctx, "Failed to publish events, retrying...",
-			"error", err, "attempt", attempt, "delay", delay)
+			"error", err, "try", try, "delay", delay)
 	}
 
 	if err := backoff.RetryNotify(publish, b, notify); err != nil {
-		r.logger.Error(ctx, "Failed to publish events, retries exhausted", err)
+		r.logger.Error(ctx, "Failed to publish events, tries exhausted", err, "tries", try)
 		return err
 	}
 
@@ -585,7 +631,7 @@ git rm ext/retrying_notifier.go
 - [ ] **Step 5: Run tests**
 
 Run: `go test ./ext/... -v`
-Expected: PASS, four tests in `RetryingSinkSuite`.
+Expected: PASS, six tests in `RetryingSinkSuite`.
 
 - [ ] **Step 6: Run the full build and suite**
 
