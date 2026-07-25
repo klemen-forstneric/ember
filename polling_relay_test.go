@@ -46,7 +46,7 @@ func (s *PollingRelaySuite) SetupTest() {
 	s.repository = &mockEventRepository{}
 	s.sink = &mockSink{}
 	s.locker = &mockLocker{}
-	r, err := NewRelay(s.repository, s.sink, s.locker, NopLogger, testRelayConfig())
+	r, err := NewPollingRelay(s.repository, s.sink, s.locker, NopLogger, testRelayConfig())
 	s.Require().NoError(err)
 	s.r = r
 }
@@ -92,7 +92,7 @@ func (s *PollingRelaySuite) TestPublishBatchFailingGroupMarksNothingInThatGroup(
 
 	logger := &mockLogger{}
 	logger.On("Warn", "Failed to publish events, will retry").Once()
-	r, err := NewRelay(s.repository, s.sink, s.locker, logger, testRelayConfig())
+	r, err := NewPollingRelay(s.repository, s.sink, s.locker, logger, testRelayConfig())
 	s.Require().NoError(err)
 	s.r = r
 
@@ -197,14 +197,14 @@ func (s *PollingRelaySuite) TestDefaultRelayConfig() {
 }
 
 func (s *PollingRelaySuite) TestNewRelayWithDefaultConfigSucceeds() {
-	r, err := NewRelay(s.repository, s.sink, s.locker, NopLogger, DefaultPollingRelayConfig("k"))
+	r, err := NewPollingRelay(s.repository, s.sink, s.locker, NopLogger, DefaultPollingRelayConfig("k"))
 
 	s.Require().NoError(err)
 	s.NotNil(r)
 }
 
 func (s *PollingRelaySuite) TestNewRelayEmptyConfigFailsOnLockKey() {
-	r, err := NewRelay(s.repository, s.sink, s.locker, NopLogger, PollingRelayConfig{})
+	r, err := NewPollingRelay(s.repository, s.sink, s.locker, NopLogger, PollingRelayConfig{})
 
 	s.Nil(r)
 	s.Require().ErrorIs(err, ErrInvalidRelayConfig)
@@ -234,7 +234,7 @@ func (s *PollingRelaySuite) TestNewRelayInvalidConfig() {
 
 	for name, cfg := range tests {
 		s.Run(name, func() {
-			r, err := NewRelay(s.repository, s.sink, s.locker, NopLogger, cfg)
+			r, err := NewPollingRelay(s.repository, s.sink, s.locker, NopLogger, cfg)
 
 			s.Nil(r)
 			s.Require().ErrorIs(err, ErrInvalidRelayConfig)
@@ -243,7 +243,7 @@ func (s *PollingRelaySuite) TestNewRelayInvalidConfig() {
 }
 
 func (s *PollingRelaySuite) TestNewRelayNilLoggerAccepted() {
-	r, err := NewRelay(s.repository, s.sink, s.locker, nil, DefaultPollingRelayConfig("k"))
+	r, err := NewPollingRelay(s.repository, s.sink, s.locker, nil, DefaultPollingRelayConfig("k"))
 
 	s.Require().NoError(err)
 	s.NotNil(r)

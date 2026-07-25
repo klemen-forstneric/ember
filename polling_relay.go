@@ -71,7 +71,7 @@ type PollingRelay struct {
 	closeOnce  sync.Once
 }
 
-func NewRelay(r EventRepository, s Sink, l Locker, log LoggerCtx, cfg PollingRelayConfig) (*PollingRelay, error) {
+func NewPollingRelay(r EventRepository, s Sink, l Locker, log LoggerCtx, cfg PollingRelayConfig) (*PollingRelay, error) {
 	if err := validateRelayConfig(cfg); err != nil {
 		return nil, err
 	}
