@@ -25,6 +25,8 @@ func (s *EntityStore[E]) List(ctx context.Context, f Filter, sort Sort) ([]E, er
 	return s.loader.List(ctx, f, sort)
 }
 
+// Save returning an error wrapping ErrDeliveryFailed means the write
+// committed and only delivery failed — do not retry.
 func (s *EntityStore[E]) Save(ctx context.Context, e E) error {
 	return s.saver.Save(ctx, e)
 }

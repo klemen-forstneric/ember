@@ -58,8 +58,9 @@ func AtLeastOnce(i IDer, r EventRepository, mg MetadataGetter, m EventMarshaler)
 	}
 }
 
-// BestEffort persists nothing and pushes to the Sink after commit. A crash
-// between commit and push loses the event.
+// BestEffort persists nothing and pushes to the Sink when EntitySaver's
+// transaction call returns — pre-commit if the caller owns an outer
+// transaction. A crash between commit and push loses the event.
 func BestEffort(i IDer, s Sink, mg MetadataGetter, m EventMarshaler) *Publisher {
 	return &Publisher{
 		builder:   envelopeBuilder{ider: i, metadata: mg, marshaler: m},

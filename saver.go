@@ -26,6 +26,8 @@ func NewEntitySaver(p *Publisher, tx Transactor, bindings ...binder) *EntitySave
 	return &EntitySaver{bindings: m, publisher: p, tx: tx}
 }
 
+// Save returning an error wrapping ErrDeliveryFailed means the write
+// committed and only delivery failed — do not retry, or the entity is saved twice.
 func (s *EntitySaver) Save(ctx context.Context, es ...Entity) error {
 	if len(es) == 0 {
 		return nil
