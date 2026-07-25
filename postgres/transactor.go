@@ -37,11 +37,16 @@ func (d *DB) Conn(ctx context.Context) conn {
 	return d.pool
 }
 
+func (d *DB) InTx(ctx context.Context) bool {
+	_, ok := ctx.Value(txKey{}).(*sql.Tx)
+	return ok
+}
+
 // WithinTx runs fn inside a transaction. Reentrant: if the ctx already carries a
 // *sql.Tx it joins that transaction rather than beginning a nested one
 // (database/sql has no nested transactions).
 func (d *DB) WithinTx(ctx context.Context, fn func(ctx context.Context) error) error {
-	if _, ok := ctx.Value(txKey{}).(*sql.Tx); ok {
+	if d.InTx(ctx) {
 		return fn(ctx)
 	}
 

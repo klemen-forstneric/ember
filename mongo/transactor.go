@@ -21,8 +21,12 @@ func NewTransactor(client *mongo.Client) *Transactor {
 
 var _ ember.Transactor = (*Transactor)(nil)
 
+func (t *Transactor) InTx(ctx context.Context) bool {
+	return mongo.SessionFromContext(ctx) != nil
+}
+
 func (t *Transactor) WithinTx(ctx context.Context, fn func(context.Context) error) error {
-	if mongo.SessionFromContext(ctx) != nil {
+	if t.InTx(ctx) {
 		return fn(ctx)
 	}
 

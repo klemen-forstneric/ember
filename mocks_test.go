@@ -111,6 +111,7 @@ func (s stubIDer) ID() string { return s.id }
 // returns the handler's error, else the configured transaction-level error.
 type mockTransactor struct {
 	mock.Mock
+	inTx bool
 }
 
 func (m *mockTransactor) WithinTx(ctx context.Context, fn func(context.Context) error) error {
@@ -120,6 +121,8 @@ func (m *mockTransactor) WithinTx(ctx context.Context, fn func(context.Context) 
 	}
 	return args.Error(0)
 }
+
+func (m *mockTransactor) InTx(context.Context) bool { return m.inTx }
 
 // mockSink is a testify mock for Sink.
 type mockSink struct {
@@ -134,6 +137,7 @@ func (m *mockSink) Publish(ctx context.Context, envelopes []EventEnvelope) error
 // deferred delivery runs after it, which a mock's call order cannot express.
 type recordingTransactor struct {
 	committed bool
+	inTx      bool
 }
 
 func (t *recordingTransactor) WithinTx(ctx context.Context, fn func(context.Context) error) error {
@@ -144,10 +148,13 @@ func (t *recordingTransactor) WithinTx(ctx context.Context, fn func(context.Cont
 	return nil
 }
 
+func (t *recordingTransactor) InTx(context.Context) bool { return t.inTx }
+
 // cancelAfterCommitTransactor runs fn, then cancels the ctx's own cancel func,
 // simulating a client disconnect that lands right after commit.
 type cancelAfterCommitTransactor struct {
 	cancel context.CancelFunc
+	inTx   bool
 }
 
 func (t *cancelAfterCommitTransactor) WithinTx(ctx context.Context, fn func(context.Context) error) error {
@@ -157,6 +164,8 @@ func (t *cancelAfterCommitTransactor) WithinTx(ctx context.Context, fn func(cont
 	t.cancel()
 	return nil
 }
+
+func (t *cancelAfterCommitTransactor) InTx(context.Context) bool { return t.inTx }
 
 // mockLocker is a testify mock for Locker.
 type mockLocker struct {

@@ -15,15 +15,19 @@ type EntitySaver struct {
 	bindings  map[string]binding
 	publisher *Publisher
 	tx        Transactor
+	logger    LoggerCtx
 }
 
-func NewEntitySaver(p *Publisher, tx Transactor, bindings ...binder) *EntitySaver {
+func NewEntitySaver(p *Publisher, tx Transactor, l LoggerCtx, bindings ...binder) *EntitySaver {
+	if l == nil {
+		l = NopLogger
+	}
 	m := make(map[string]binding, len(bindings))
 	for _, b := range bindings {
 		bd := b.binding()
 		m[bd.typ] = bd
 	}
-	return &EntitySaver{bindings: m, publisher: p, tx: tx}
+	return &EntitySaver{bindings: m, publisher: p, tx: tx, logger: l}
 }
 
 // Save returning an error wrapping ErrDeliveryFailed means the write
@@ -66,6 +70,8 @@ func (s *EntitySaver) Save(ctx context.Context, es ...Entity) error {
 		return err
 	}
 
+	joined := s.tx.InTx(ctx)
+
 	var err error
 	if len(es) == 1 && len(events) == 0 {
 		err = fn(ctx)
@@ -84,6 +90,9 @@ func (s *EntitySaver) Save(ctx context.Context, es ...Entity) error {
 
 	if deliver == nil {
 		return nil
+	}
+	if joined {
+		s.logger.Warn(ctx, "Delivering events inside a caller-owned transaction; a rollback will publish events for uncommitted state")
 	}
 	if err := deliver(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("%w: %w", ErrDeliveryFailed, err)

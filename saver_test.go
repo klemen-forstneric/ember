@@ -32,7 +32,7 @@ func (s *EntitySaverSuite) SetupTest() {
 	s.sink = &mockSink{}
 	s.tx = &mockTransactor{}
 	publisher := AtLeastOnce(stubIDer{id: "evt-1"}, s.eventRepo, NoopMetadataGetter{}, s.eventMarsh)
-	s.saver = NewEntitySaver(publisher, s.tx, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
+	s.saver = NewEntitySaver(publisher, s.tx, nil, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
 }
 
 func (s *EntitySaverSuite) TearDownTest() {
@@ -142,7 +142,7 @@ func (s *EntitySaverSuite) TestSaveTwoTypesOneTx() {
 	repo2 := &mockEntityRepository{}
 	marsh2 := &mockEntityMarshaler[*fakeEntity2]{}
 	publisher := AtLeastOnce(stubIDer{id: "evt-1"}, s.eventRepo, NoopMetadataGetter{}, s.eventMarsh)
-	saver := NewEntitySaver(publisher, s.tx,
+	saver := NewEntitySaver(publisher, s.tx, nil,
 		Bind[*fakeEntity](s.entityRepo, s.entityMarsh),
 		Bind[*fakeEntity2](repo2, marsh2),
 	)
@@ -171,15 +171,15 @@ func (s *EntitySaverSuite) TestSaveTwoTypesOneTx() {
 }
 
 // bestEffortSaver builds an EntitySaver on a BestEffort publisher against the
-// suite's sink and a fresh recordingTransactor.
-func (s *EntitySaverSuite) bestEffortSaver() (*EntitySaver, *recordingTransactor) {
+// suite's sink and a fresh recordingTransactor. l may be nil (defaults to NopLogger).
+func (s *EntitySaverSuite) bestEffortSaver(l LoggerCtx) (*EntitySaver, *recordingTransactor) {
 	tx := &recordingTransactor{}
 	publisher := BestEffort(stubIDer{id: "evt-1"}, s.sink, NoopMetadataGetter{}, s.eventMarsh)
-	return NewEntitySaver(publisher, tx, Bind[*fakeEntity](s.entityRepo, s.entityMarsh)), tx
+	return NewEntitySaver(publisher, tx, l, Bind[*fakeEntity](s.entityRepo, s.entityMarsh)), tx
 }
 
 func (s *EntitySaverSuite) TestBestEffortDeliversAfterCommit() {
-	saver, tx := s.bestEffortSaver()
+	saver, tx := s.bestEffortSaver(nil)
 
 	e := newFakeEntity("1")
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
@@ -202,7 +202,7 @@ func (s *EntitySaverSuite) TestBestEffortDeliversAfterCommit() {
 
 func (s *EntitySaverSuite) TestBestEffortCommitFailureDoesNotDeliver() {
 	publisher := BestEffort(stubIDer{id: "evt-1"}, s.sink, NoopMetadataGetter{}, s.eventMarsh)
-	saver := NewEntitySaver(publisher, s.tx, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
+	saver := NewEntitySaver(publisher, s.tx, nil, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
 
 	e := newFakeEntity("1")
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
@@ -228,7 +228,7 @@ func (s *EntitySaverSuite) TestBestEffortDeliveryIgnoresPostCommitCancellation()
 	ctx, cancel := context.WithCancel(context.Background())
 	tx := &cancelAfterCommitTransactor{cancel: cancel}
 	publisher := BestEffort(stubIDer{id: "evt-1"}, s.sink, NoopMetadataGetter{}, s.eventMarsh)
-	saver := NewEntitySaver(publisher, tx, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
+	saver := NewEntitySaver(publisher, tx, nil, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
 
 	e := newFakeEntity("1")
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
@@ -252,7 +252,7 @@ func (s *EntitySaverSuite) TestBestEffortDeliveryIgnoresPostCommitCancellation()
 }
 
 func (s *EntitySaverSuite) TestBestEffortDeliveryFailureStillAdvancesEntity() {
-	saver, _ := s.bestEffortSaver()
+	saver, _ := s.bestEffortSaver(nil)
 
 	e := newFakeEntity("1")
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
@@ -269,4 +269,69 @@ func (s *EntitySaverSuite) TestBestEffortDeliveryFailureStillAdvancesEntity() {
 	// State committed, so the entity must match durable state regardless.
 	s.Equal(uint64(1), e.Version().Value())
 	s.Empty(e.events().All())
+}
+
+const joinedTxWarning = "Delivering events inside a caller-owned transaction; a rollback will publish events for uncommitted state"
+
+func (s *EntitySaverSuite) TestBestEffortWarnsWhenJoiningCallerTx() {
+	logger := &mockLogger{}
+	saver, tx := s.bestEffortSaver(logger)
+	tx.inTx = true
+
+	e := newFakeEntity("1")
+	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
+	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
+	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
+	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
+		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
+	logger.On("Warn", joinedTxWarning).Return().Once()
+
+	err := saver.Save(s.ctx, e)
+
+	s.Require().NoError(err)
+	logger.AssertExpectations(s.T())
+}
+
+func (s *EntitySaverSuite) TestBestEffortSilentWhenEmberOwnsTx() {
+	logger := &mockLogger{}
+	saver, tx := s.bestEffortSaver(logger)
+	tx.inTx = false
+
+	e := newFakeEntity("1")
+	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
+	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
+	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
+	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
+		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
+
+	err := saver.Save(s.ctx, e)
+
+	s.Require().NoError(err)
+	logger.AssertNotCalled(s.T(), "Warn", mock.Anything)
+}
+
+func (s *EntitySaverSuite) TestSaveJoinedTxAtLeastOnceDoesNotWarn() {
+	s.tx.inTx = true
+	logger := &mockLogger{}
+	publisher := AtLeastOnce(stubIDer{id: "evt-1"}, s.eventRepo, NoopMetadataGetter{}, s.eventMarsh)
+	saver := NewEntitySaver(publisher, s.tx, logger, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
+
+	e := newFakeEntity("1")
+	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
+	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
+	mev := &MarshaledEvent{Type: "Created", Data: []byte(`{}`)}
+	s.tx.On("WithinTx", mock.Anything).Return(nil).Once()
+	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
+	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).Return(mev, nil)
+	s.eventRepo.On("Save", mock.Anything, mock.Anything).Return(nil)
+
+	err := saver.Save(s.ctx, e)
+
+	s.Require().NoError(err)
+	logger.AssertNotCalled(s.T(), "Warn", mock.Anything)
 }
