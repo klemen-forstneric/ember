@@ -45,7 +45,9 @@ func (s *RelaySuite) SetupTest() {
 	s.repository = &mockEventRepository{}
 	s.sink = &mockSink{}
 	s.locker = &mockLocker{}
-	s.r = NewRelay(s.repository, s.sink, s.locker, NopLogger, testRelayConfig())
+	r, err := NewRelay(s.repository, s.sink, s.locker, NopLogger, testRelayConfig())
+	s.Require().NoError(err)
+	s.r = r
 }
 
 func (s *RelaySuite) TestPublishBatchPublishesInOrderAndMarks() {
@@ -106,7 +108,9 @@ func (s *RelaySuite) TestPublishBatchLogsPublishedAndRetry() {
 	logger := &mockLogger{}
 	logger.On("Info", "Published event").Once()
 	logger.On("Warn", "Failed to publish event, will retry").Once()
-	s.r = NewRelay(s.repository, s.sink, s.locker, logger, testRelayConfig())
+	r, err := NewRelay(s.repository, s.sink, s.locker, logger, testRelayConfig())
+	s.Require().NoError(err)
+	s.r = r
 
 	published, err := s.r.publishBatch(context.Background())
 
@@ -183,4 +187,67 @@ func (s *RelaySuite) TestCloseIsIdempotent() {
 		s.NoError(s.r.Close())
 		s.NoError(s.r.Close())
 	})
+}
+
+func (s *RelaySuite) TestDefaultRelayConfig() {
+	cfg := DefaultRelayConfig("k")
+
+	s.Equal(200*time.Millisecond, cfg.IdleInterval)
+	s.Equal(500, cfg.BatchSize)
+	s.Equal("k", cfg.LockKey)
+	s.Equal(30*time.Second, cfg.LockTTL)
+	s.Equal(7*24*time.Hour, cfg.Retention)
+}
+
+func (s *RelaySuite) TestNewRelayWithDefaultConfigSucceeds() {
+	r, err := NewRelay(s.repository, s.sink, s.locker, NopLogger, DefaultRelayConfig("k"))
+
+	s.Require().NoError(err)
+	s.NotNil(r)
+}
+
+func (s *RelaySuite) TestNewRelayEmptyConfigFailsOnLockKey() {
+	r, err := NewRelay(s.repository, s.sink, s.locker, NopLogger, RelayConfig{})
+
+	s.Nil(r)
+	s.Require().ErrorIs(err, ErrInvalidRelayConfig)
+	s.Contains(err.Error(), "LockKey")
+}
+
+func (s *RelaySuite) TestNewRelayInvalidConfig() {
+	valid := func() RelayConfig {
+		cfg := DefaultRelayConfig("k")
+		cfg.IdleInterval = time.Millisecond
+		cfg.LockTTL = time.Minute
+		return cfg
+	}
+
+	tests := map[string]RelayConfig{
+		"IdleInterval zero": func() RelayConfig { c := valid(); c.IdleInterval = 0; return c }(),
+		"BatchSize zero":    func() RelayConfig { c := valid(); c.BatchSize = 0; return c }(),
+		"LockTTL zero":      func() RelayConfig { c := valid(); c.LockTTL = 0; return c }(),
+		"Retention zero":    func() RelayConfig { c := valid(); c.Retention = 0; return c }(),
+		"LockTTL below IdleInterval": func() RelayConfig {
+			c := valid()
+			c.IdleInterval = time.Minute
+			c.LockTTL = time.Second
+			return c
+		}(),
+	}
+
+	for name, cfg := range tests {
+		s.Run(name, func() {
+			r, err := NewRelay(s.repository, s.sink, s.locker, NopLogger, cfg)
+
+			s.Nil(r)
+			s.Require().ErrorIs(err, ErrInvalidRelayConfig)
+		})
+	}
+}
+
+func (s *RelaySuite) TestNewRelayNilLoggerAccepted() {
+	r, err := NewRelay(s.repository, s.sink, s.locker, nil, DefaultRelayConfig("k"))
+
+	s.Require().NoError(err)
+	s.NotNil(r)
 }

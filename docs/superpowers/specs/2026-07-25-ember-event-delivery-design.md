@@ -205,7 +205,8 @@ type RelayConfig struct {
     Retention    time.Duration // published_at + Retention → expires_at (TTL)
 }
 
-func NewRelay(r EventRepository, s Sink, l Locker, log LoggerCtx, cfg RelayConfig) *Relay
+func DefaultRelayConfig(key string) RelayConfig
+func NewRelay(r EventRepository, s Sink, l Locker, log LoggerCtx, cfg RelayConfig) (*Relay, error)
 func (r *Relay) Run(ctx context.Context)
 func (r *Relay) Close() error
 ```
@@ -214,6 +215,11 @@ Retains the redis efficiency lock, jittered interval, batch drain, and the per-e
 failure isolation (`failed[e.EntityID]` skips later events for an entity whose earlier event
 failed) that preserves per-entity order. `Notify` is deleted along with the interface it
 existed to satisfy.
+
+`NewRelay` validates `cfg` rather than defaulting it, returning `ErrInvalidRelayConfig`.
+`LockKey` is validated, never defaulted: replicas of one service must share it and other
+services must not, so a package-level default would silently make every relay contend on
+the same key. `DefaultRelayConfig(key)` supplies the rest.
 
 `postgres.EventRepository` already satisfies `EventRepository` in full, so a postgres relay
 becomes wiring-only — still gated on the ordering fix, which must land before any relay
@@ -310,9 +316,9 @@ publisher := ember.NewPublisher(&skuuid.IDer{}, outboxRepository,
 go notifier.Run(ctx)
 
 // after
-relay := ember.NewRelay(outboxRepository, pulsarPublisher,
+relay, err := ember.NewRelay(outboxRepository, pulsarPublisher,
     emberredis.NewLocker(redisClient), logger,
-    ember.RelayConfig{LockKey: "order-service:outbox:relay"})
+    ember.DefaultRelayConfig("order-service:outbox:relay"))
 publisher := ember.AtLeastOnce(&skuuid.IDer{}, outboxRepository,
     &ext.MetadataGetter{}, eventMarshaler)
 go relay.Run(ctx)

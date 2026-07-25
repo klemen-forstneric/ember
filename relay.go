@@ -3,6 +3,8 @@ package ember
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -17,6 +19,46 @@ type RelayConfig struct {
 	Retention    time.Duration // published_at + Retention → expires_at (TTL)
 }
 
+const (
+	defaultIdleInterval = 200 * time.Millisecond
+	defaultBatchSize    = 500
+	defaultLockTTL      = 30 * time.Second
+	defaultRetention    = 7 * 24 * time.Hour
+)
+
+// DefaultRelayConfig returns a RelayConfig with sensible defaults. key must be
+// unique per service and shared by that service's replicas.
+func DefaultRelayConfig(key string) RelayConfig {
+	return RelayConfig{
+		IdleInterval: defaultIdleInterval,
+		BatchSize:    defaultBatchSize,
+		LockKey:      key,
+		LockTTL:      defaultLockTTL,
+		Retention:    defaultRetention,
+	}
+}
+
+// ErrInvalidRelayConfig is returned by NewRelay when cfg fails validation.
+var ErrInvalidRelayConfig = errors.New("ember: invalid relay config")
+
+func validateRelayConfig(cfg RelayConfig) error {
+	switch {
+	case cfg.LockKey == "":
+		return fmt.Errorf("%w: LockKey must not be empty", ErrInvalidRelayConfig)
+	case cfg.IdleInterval <= 0:
+		return fmt.Errorf("%w: IdleInterval must be positive", ErrInvalidRelayConfig)
+	case cfg.BatchSize <= 0:
+		return fmt.Errorf("%w: BatchSize must be positive", ErrInvalidRelayConfig)
+	case cfg.LockTTL <= 0:
+		return fmt.Errorf("%w: LockTTL must be positive", ErrInvalidRelayConfig)
+	case cfg.Retention <= 0:
+		return fmt.Errorf("%w: Retention must be positive", ErrInvalidRelayConfig)
+	case cfg.LockTTL <= cfg.IdleInterval:
+		return fmt.Errorf("%w: LockTTL must exceed IdleInterval", ErrInvalidRelayConfig)
+	}
+	return nil
+}
+
 // Relay drains the outbox to the Sink. It is the sole publisher under the
 // AtLeastOnce guarantee.
 type Relay struct {
@@ -29,18 +71,9 @@ type Relay struct {
 	closeOnce  sync.Once
 }
 
-func NewRelay(r EventRepository, s Sink, l Locker, log LoggerCtx, cfg RelayConfig) *Relay {
-	if cfg.IdleInterval <= 0 {
-		cfg.IdleInterval = 200 * time.Millisecond
-	}
-	if cfg.BatchSize <= 0 {
-		cfg.BatchSize = 500
-	}
-	if cfg.LockTTL <= 0 {
-		cfg.LockTTL = 30 * time.Second
-	}
-	if cfg.Retention <= 0 {
-		cfg.Retention = 7 * 24 * time.Hour
+func NewRelay(r EventRepository, s Sink, l Locker, log LoggerCtx, cfg RelayConfig) (*Relay, error) {
+	if err := validateRelayConfig(cfg); err != nil {
+		return nil, err
 	}
 	if log == nil {
 		log = NopLogger
@@ -53,7 +86,7 @@ func NewRelay(r EventRepository, s Sink, l Locker, log LoggerCtx, cfg RelayConfi
 		logger:     log,
 		cfg:        cfg,
 		done:       make(chan struct{}),
-	}
+	}, nil
 }
 
 func (r *Relay) publishBatch(ctx context.Context) (int, error) {
