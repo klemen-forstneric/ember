@@ -380,11 +380,15 @@ called "Retrying" that did not retry unless configured. The replacement bounds a
 type RetryingSinkConfig struct {
     InitialInterval time.Duration // default 100ms
     MaxInterval     time.Duration // default 1s
-    MaxTries        uint          // total attempts including the first; default 3, 1 disables retrying
+    MaxTries        int           // total attempts including the first; default 3, 1 disables retrying
 }
 ```
 
 Tries rather than retries, because "3 retries" invites an off-by-one at every call site.
+`int`, not backoff's `uint` — the dependency's choice of unsigned is an implementation detail
+converted at the single call site, not something the config should make callers deal with.
+Defaulting is then uniform across all three fields (`<= 0` applies the default), and since the
+default guarantees `MaxTries >= 1`, the conversion to `uint` cannot wrap.
 
 **backoff upgrades v4.3.0 → v7.0.0**, where this is the native vocabulary:
 `WithMaxTries(n)` bounds *total attempts*, so `MaxTries` maps straight through with no

@@ -18,7 +18,7 @@
 - Keep comments minimal — a terse one-liner only where the code is genuinely non-obvious. No paragraph rationale blocks.
 - Conventional Commits for every commit message.
 - **Resolved open decision 1:** there is one outbox interface. `EventRepository` grows `ListUnpublished` and `MarkPublished` instead of gaining a sibling, so `AtLeastOnce` requires a drainable outbox at compile time. mongo's package-local `eventRepository` is deleted, not promoted.
-- **Resolved open decision 2:** `RetryingSink` bounds attempts, not elapsed time. `MaxTries uint` counts total attempts including the first; defaults are `InitialInterval` 100ms, `MaxInterval` 1s, `MaxTries` 3. The old `MaxElapsedTime: -1` default (zero retries) is dropped. backoff upgrades v4.3.0 → v7.0.0 in Task 3, whose `WithMaxTries` is already total-attempt semantics.
+- **Resolved open decision 2:** `RetryingSink` bounds attempts, not elapsed time. `MaxTries int` counts total attempts including the first (`int`, not backoff's `uint` — converted at the call site); defaults are `InitialInterval` 100ms, `MaxInterval` 1s, `MaxTries` 3. The old `MaxElapsedTime: -1` default (zero retries) is dropped. backoff upgrades v4.3.0 → v7.0.0 in Task 3, whose `WithMaxTries` is already total-attempt semantics.
 - This is a breaking library change. Consuming services are not updated by this plan.
 
 ---
@@ -344,7 +344,7 @@ git commit -m "refactor: replace Transport with Sink and Source"
 
 Retry is a property of the transport, not a delivery strategy. `RetryingNotifier` becomes a `Sink` decorator that returns an error instead of swallowing it, bounds attempts via `MaxTries` instead of a wall-clock ceiling, and honors context cancellation.
 
-This also upgrades backoff v4.3.0 → v7.0.0. v7's `WithMaxTries` counts total attempts, so `MaxTries` needs no conversion, and `Retry` takes `ctx` as its first argument — the current code passes no context, so a cancelled request keeps retrying. `ext/retrying_notifier.go` is the only file in ember importing backoff, and v7 requires go 1.23 against ember's 1.26.3.
+This also upgrades backoff v4.3.0 → v7.0.0. v7's `WithMaxTries` counts total attempts, so `MaxTries` needs no off-by-one arithmetic, and `Retry` takes `ctx` as its first argument — the current code passes no context, so a cancelled request keeps retrying. `ext/retrying_notifier.go` is the only file in ember importing backoff, and v7 requires go 1.23 against ember's 1.26.3.
 
 **Files:**
 - Modify: `go.mod`, `go.sum` (backoff v4 → v7)
@@ -355,7 +355,7 @@ This also upgrades backoff v4.3.0 → v7.0.0. v7's `WithMaxTries` counts total a
 
 **Interfaces:**
 - Consumes: `ember.Sink` from Task 2.
-- Produces: `ext.RetryingSinkConfig` struct with fields `InitialInterval time.Duration`, `MaxInterval time.Duration`, `MaxTries uint`; `ext.NewRetryingSink(c RetryingSinkConfig, s ember.Sink, l ember.LoggerCtx) *ext.RetryingSink` with method `Publish(ctx context.Context, envelopes []ember.EventEnvelope) error`.
+- Produces: `ext.RetryingSinkConfig` struct with fields `InitialInterval time.Duration`, `MaxInterval time.Duration`, `MaxTries int`; `ext.NewRetryingSink(c RetryingSinkConfig, s ember.Sink, l ember.LoggerCtx) *ext.RetryingSink` with method `Publish(ctx context.Context, envelopes []ember.EventEnvelope) error`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -421,7 +421,7 @@ func envelopes() []ember.EventEnvelope {
 }
 
 // fastConfig keeps waits sub-millisecond so exhaustion tests stay quick.
-func fastConfig(tries uint) RetryingSinkConfig {
+func fastConfig(tries int) RetryingSinkConfig {
 	return RetryingSinkConfig{
 		InitialInterval: time.Millisecond,
 		MaxInterval:     time.Millisecond,
@@ -516,7 +516,7 @@ func (s *RetryingSinkSuite) TestZeroConfigAppliesDefaults() {
 
 	s.Equal(100*time.Millisecond, r.config.InitialInterval)
 	s.Equal(time.Second, r.config.MaxInterval)
-	s.Equal(uint(3), r.config.MaxTries)
+	s.Equal(3, r.config.MaxTries)
 }
 ```
 
@@ -558,7 +558,7 @@ type RetryingSinkConfig struct {
 	// MaxInterval caps the delay between tries.
 	MaxInterval time.Duration
 	// MaxTries is the total number of attempts including the first. 1 disables retrying.
-	MaxTries uint
+	MaxTries int
 }
 
 const (
@@ -583,7 +583,7 @@ func NewRetryingSink(c RetryingSinkConfig, s ember.Sink, l ember.LoggerCtx) *Ret
 	if c.MaxInterval <= 0 {
 		c.MaxInterval = defaultMaxInterval
 	}
-	if c.MaxTries == 0 {
+	if c.MaxTries <= 0 {
 		c.MaxTries = defaultMaxTries
 	}
 	if l == nil {
@@ -619,7 +619,7 @@ func (r *RetryingSink) Publish(ctx context.Context, envelopes []ember.EventEnvel
 	// WithMaxElapsedTime(0) disables v7's 15-minute default; MaxTries is the only bound.
 	if _, err := backoff.Retry(ctx, publish,
 		backoff.WithBackOff(exp),
-		backoff.WithMaxTries(r.config.MaxTries),
+		backoff.WithMaxTries(uint(r.config.MaxTries)), // defaulting guarantees >= 1
 		backoff.WithMaxElapsedTime(0),
 		backoff.WithNotify(notify),
 	); err != nil {
