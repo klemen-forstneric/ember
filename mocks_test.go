@@ -129,9 +129,8 @@ type mockSink struct {
 	mock.Mock
 }
 
-func (m *mockSink) Publish(ctx context.Context, envelopes []EventEnvelope) (int, error) {
-	args := m.Called(ctx, envelopes)
-	return args.Int(0), args.Error(1)
+func (m *mockSink) Publish(ctx context.Context, envelopes []EventEnvelope) error {
+	return m.Called(ctx, envelopes).Error(0)
 }
 
 // recordingTransactor marks the commit boundary so tests can assert that a

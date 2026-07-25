@@ -11,6 +11,9 @@ import (
 	"github.com/klemen-forstneric/ember"
 )
 
+// defaultMaxMessageSize matches Pulsar's default maxMessageSize.
+const defaultMaxMessageSize = 5 * 1024 * 1024
+
 // producerRegistry resolves the producer for an event type, creating and
 // caching it on demand. Get returns an error for an unmapped event type.
 type producerRegistry interface {
@@ -21,16 +24,22 @@ type producerRegistry interface {
 // Publisher sends marshaled event envelopes onto Pulsar topics, routing each
 // event to its topic via the producerRegistry.
 type Publisher struct {
-	registry producerRegistry
+	registry       producerRegistry
+	maxMessageSize int
 }
 
-func NewPublisher(r producerRegistry) *Publisher {
-	return &Publisher{registry: r}
+// NewPublisher builds a Publisher. maxMessageSize caps the marshaled payload
+// size; 0 uses defaultMaxMessageSize.
+func NewPublisher(r producerRegistry, maxMessageSize int) *Publisher {
+	if maxMessageSize <= 0 {
+		maxMessageSize = defaultMaxMessageSize
+	}
+	return &Publisher{registry: r, maxMessageSize: maxMessageSize}
 }
 
-func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope) (int, error) {
+func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope) error {
 	if len(envelopes) == 0 {
-		return 0, nil
+		return nil
 	}
 
 	type pending struct {
@@ -43,12 +52,12 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 	for _, e := range envelopes {
 		correlationID, ok := e.Metadata[MetadataKeyCorrelationID].(string)
 		if !ok {
-			return 0, fmt.Errorf("invalid metadata, missing key '%v'", MetadataKeyCorrelationID)
+			return fmt.Errorf("invalid metadata, missing key '%v'", MetadataKeyCorrelationID)
 		}
 
 		prod, err := p.registry.Get(ctx, e.Event.Type)
 		if err != nil {
-			return 0, err
+			return err
 		}
 
 		payload, err := json.Marshal(&message{
@@ -61,7 +70,11 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 			PublishedAt:   e.Timestamp,
 		})
 		if err != nil {
-			return 0, err
+			return err
+		}
+
+		if len(payload) > p.maxMessageSize {
+			return fmt.Errorf("envelope %q: marshaled payload %d bytes exceeds max %d", e.ID, len(payload), p.maxMessageSize)
 		}
 
 		prepared = append(prepared, pending{
@@ -87,12 +100,7 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 	}
 	wg.Wait()
 
-	for i, err := range errs {
-		if err != nil {
-			return i, errors.Join(errs[i:]...)
-		}
-	}
-	return len(prepared), nil
+	return errors.Join(errs...)
 }
 
 func (p *Publisher) Close() error {

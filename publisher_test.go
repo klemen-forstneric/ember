@@ -111,7 +111,7 @@ func (s *PublisherSuite) TestBestEffortPublishesToSink() {
 	s.marshaler.On("Marshal", mock.Anything, evt).Return(marshaled, nil)
 	s.sink.On("Publish", mock.Anything, mock.MatchedBy(func(envs []EventEnvelope) bool {
 		return len(envs) == 1 && envs[0].ID == "evt-1" && envs[0].Event == marshaled
-	})).Return(1, nil)
+	})).Return(nil)
 
 	err := s.bestEffortPublisher().Publish(s.ctx, evt)
 
@@ -122,7 +122,7 @@ func (s *PublisherSuite) TestBestEffortSinkError() {
 	evt := fakeEvent{entityID: "A", typ: "Created"}
 	sinkErr := errors.New("broker down")
 	s.marshaler.On("Marshal", mock.Anything, evt).Return(&MarshaledEvent{Type: "Created"}, nil)
-	s.sink.On("Publish", mock.Anything, mock.Anything).Return(0, sinkErr)
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(sinkErr)
 
 	err := s.bestEffortPublisher().Publish(s.ctx, evt)
 
@@ -139,7 +139,7 @@ func (s *PublisherSuite) TestBestEffortStageDefersDelivery() {
 	s.Require().NotNil(d, "delivery must wait for commit")
 	s.sink.AssertNotCalled(s.T(), "Publish", mock.Anything, mock.Anything)
 
-	s.sink.On("Publish", mock.Anything, mock.Anything).Return(1, nil).Once()
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
 	s.Require().NoError(d(s.ctx))
 }
 

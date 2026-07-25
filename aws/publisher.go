@@ -15,8 +15,13 @@ type snsClient interface {
 	Publish(ctx context.Context, params *sns.PublishInput, optFns ...func(*sns.Options)) (*sns.PublishOutput, error)
 }
 
+// defaultMaxMessageSize is SNS's hard per-message limit.
+const defaultMaxMessageSize = 256 * 1024
+
 type PublisherConfig struct {
 	Topic string
+	// MaxMessageSize caps the marshaled payload size; 0 uses defaultMaxMessageSize.
+	MaxMessageSize int
 }
 
 type Publisher struct {
@@ -26,6 +31,9 @@ type Publisher struct {
 }
 
 func NewPublisher(cfg PublisherConfig, c snsClient, l ember.LoggerCtx) *Publisher {
+	if cfg.MaxMessageSize <= 0 {
+		cfg.MaxMessageSize = defaultMaxMessageSize
+	}
 	return &Publisher{
 		cfg:    cfg,
 		client: c,
@@ -33,11 +41,13 @@ func NewPublisher(cfg PublisherConfig, c snsClient, l ember.LoggerCtx) *Publishe
 	}
 }
 
-func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope) (int, error) {
-	for i, e := range envelopes {
+func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope) error {
+	inputs := make([]*sns.PublishInput, 0, len(envelopes))
+
+	for _, e := range envelopes {
 		correlationId, ok := e.Metadata[MetadataKeyCorrelationID].(string)
 		if !ok {
-			return i, fmt.Errorf("invalid metadata, missing key '%v'", MetadataKeyCorrelationID)
+			return fmt.Errorf("invalid metadata, missing key '%v'", MetadataKeyCorrelationID)
 		}
 
 		m := &message{
@@ -52,22 +62,28 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 
 		payload, err := json.Marshal(m)
 		if err != nil {
-			return i, errors.Wrap(err, "could not marshal the message")
+			return errors.Wrap(err, "could not marshal the message")
 		}
 
-		in := &sns.PublishInput{
+		if len(payload) > p.cfg.MaxMessageSize {
+			return fmt.Errorf("envelope %q: marshaled payload %d bytes exceeds max %d", e.ID, len(payload), p.cfg.MaxMessageSize)
+		}
+
+		inputs = append(inputs, &sns.PublishInput{
 			MessageDeduplicationId: aws.String(e.ID),
 			MessageGroupId:         aws.String(e.EntityID),
 			Message:                aws.String(string(payload)),
 			TopicArn:               aws.String(p.cfg.Topic),
-		}
+		})
+	}
 
+	for _, in := range inputs {
 		if _, err := p.client.Publish(ctx, in); err != nil {
-			return i, errors.Wrap(err, "could not publish the message")
+			return errors.Wrap(err, "could not publish the message")
 		}
 	}
 
-	return len(envelopes), nil
+	return nil
 }
 
 var _ ember.Sink = (*Publisher)(nil)

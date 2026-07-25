@@ -9,6 +9,9 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
+// defaultMaxMessageSize matches Kafka's default message.max.bytes.
+const defaultMaxMessageSize = 1024 * 1024
+
 // writer is the narrow slice of *kafka.Writer the Publisher needs. A topic-less
 // *kafka.Writer satisfies this directly and routes per-message by Message.Topic.
 type writer interface {
@@ -20,29 +23,35 @@ type writer interface {
 // event to its topic via the routes table. A single multi-topic writer is used,
 // so no per-topic producer registry is needed (unlike the pulsar package).
 type Publisher struct {
-	w      writer
-	routes map[string]string // eventType -> topic
+	w              writer
+	routes         map[string]string // eventType -> topic
+	maxMessageSize int
 }
 
-func NewPublisher(w writer, routes map[string]string) *Publisher {
-	return &Publisher{w: w, routes: routes}
+// NewPublisher builds a Publisher. maxMessageSize caps the marshaled payload
+// size; 0 uses defaultMaxMessageSize.
+func NewPublisher(w writer, routes map[string]string, maxMessageSize int) *Publisher {
+	if maxMessageSize <= 0 {
+		maxMessageSize = defaultMaxMessageSize
+	}
+	return &Publisher{w: w, routes: routes, maxMessageSize: maxMessageSize}
 }
 
-func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope) (int, error) {
+func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope) error {
 	if len(envelopes) == 0 {
-		return 0, nil
+		return nil
 	}
 
 	msgs := make([]kafka.Message, 0, len(envelopes))
 	for _, e := range envelopes {
 		correlationID, ok := e.Metadata[MetadataKeyCorrelationID].(string)
 		if !ok {
-			return 0, fmt.Errorf("invalid metadata, missing key '%v'", MetadataKeyCorrelationID)
+			return fmt.Errorf("invalid metadata, missing key '%v'", MetadataKeyCorrelationID)
 		}
 
 		topic, ok := p.routes[e.Event.Type]
 		if !ok {
-			return 0, fmt.Errorf("no topic configured for event type %q", e.Event.Type)
+			return fmt.Errorf("no topic configured for event type %q", e.Event.Type)
 		}
 
 		payload, err := json.Marshal(&message{
@@ -55,7 +64,11 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 			PublishedAt:   e.Timestamp,
 		})
 		if err != nil {
-			return 0, err
+			return err
+		}
+
+		if len(payload) > p.maxMessageSize {
+			return fmt.Errorf("envelope %q: marshaled payload %d bytes exceeds max %d", e.ID, len(payload), p.maxMessageSize)
 		}
 
 		msgs = append(msgs, kafka.Message{
@@ -66,10 +79,7 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 		})
 	}
 
-	if err := p.w.WriteMessages(ctx, msgs...); err != nil {
-		return 0, err
-	}
-	return len(envelopes), nil
+	return p.w.WriteMessages(ctx, msgs...)
 }
 
 func (p *Publisher) Close() error {

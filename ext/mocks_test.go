@@ -10,9 +10,8 @@ import (
 
 type mockSink struct{ mock.Mock }
 
-func (m *mockSink) Publish(ctx context.Context, envelopes []ember.EventEnvelope) (int, error) {
-	args := m.Called(ctx, envelopes)
-	return args.Int(0), args.Error(1)
+func (m *mockSink) Publish(ctx context.Context, envelopes []ember.EventEnvelope) error {
+	return m.Called(ctx, envelopes).Error(0)
 }
 
 // mockLogger records level+msg per call so tests can assert logging without

@@ -114,8 +114,15 @@ func (r *Relay) publishBatch(ctx context.Context) (int, error) {
 
 	published := make([]string, 0, len(events))
 	for _, group := range groupByEntity(events) {
-		n, err := r.sink.Publish(ctx, group)
-		for _, e := range group[:n] {
+		if err := r.sink.Publish(ctx, group); err != nil {
+			e := group[0]
+			r.logger.Warn(ctx, "Failed to publish events, will retry",
+				"error", err, "eventId", e.ID, "type", e.Event.Type, "entity_id", e.EntityID,
+				"events", len(group))
+			continue
+		}
+
+		for _, e := range group {
 			published = append(published, e.ID)
 
 			elapsed := time.Since(e.Timestamp)
@@ -123,11 +130,6 @@ func (r *Relay) publishBatch(ctx context.Context) (int, error) {
 				"entity_id", e.EntityID, "payload", json.RawMessage(e.Event.Data),
 				"metadata", e.Metadata, "timestamp", e.Timestamp,
 				"elapsed_ms", elapsed.Milliseconds())
-		}
-		if err != nil && n < len(group) {
-			e := group[n]
-			r.logger.Warn(ctx, "Failed to publish event, will retry",
-				"error", err, "eventId", e.ID, "type", e.Event.Type, "entity_id", e.EntityID)
 		}
 	}
 

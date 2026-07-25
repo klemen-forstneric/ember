@@ -57,15 +57,12 @@ func NewRetryingSink(c RetryingSinkConfig, s ember.Sink, l ember.LoggerCtx) *Ret
 
 var _ ember.Sink = (*RetryingSink)(nil)
 
-func (r *RetryingSink) Publish(ctx context.Context, envelopes []ember.EventEnvelope) (int, error) {
+func (r *RetryingSink) Publish(ctx context.Context, envelopes []ember.EventEnvelope) error {
 	var try int
-	published := 0
 
 	publish := func() (struct{}, error) {
 		try++
-		n, err := r.sink.Publish(ctx, envelopes[published:])
-		published += n
-		return struct{}{}, err
+		return struct{}{}, r.sink.Publish(ctx, envelopes)
 	}
 
 	exp := backoff.NewExponentialBackOff()
@@ -85,10 +82,10 @@ func (r *RetryingSink) Publish(ctx context.Context, envelopes []ember.EventEnvel
 		backoff.WithNotify(notify),
 	); err != nil {
 		r.logger.Error(ctx, "Failed to publish events, tries exhausted", err, "tries", try)
-		return published, err
+		return err
 	}
 
-	for _, e := range envelopes[:published] {
+	for _, e := range envelopes {
 		elapsed := time.Since(e.Timestamp)
 
 		r.logger.Info(ctx, "Published event", "eventId", e.ID, "type", e.Event.Type,
@@ -96,5 +93,5 @@ func (r *RetryingSink) Publish(ctx context.Context, envelopes []ember.EventEnvel
 			"metadata", e.Metadata, "timestamp", e.Timestamp,
 			"elapsed_ms", elapsed.Milliseconds())
 	}
-	return published, nil
+	return nil
 }

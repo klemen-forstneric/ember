@@ -55,8 +55,8 @@ func (s *RelaySuite) TestPublishBatchOneCallPerEntity() {
 	batch := []EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "B")}
 	s.repository.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
 
-	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[0], batch[1]}).Return(2, nil).Once()
-	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[2]}).Return(1, nil).Once()
+	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[0], batch[1]}).Return(nil).Once()
+	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[2]}).Return(nil).Once()
 	s.repository.On("MarkPublished", mock.Anything, []string{"e1", "e2", "e3"}, mock.Anything).Return(nil).Once()
 
 	published, err := s.r.publishBatch(context.Background())
@@ -72,8 +72,8 @@ func (s *RelaySuite) TestPublishBatchFailingGroupDoesNotBlockOtherEntities() {
 	s.repository.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
 
 	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[0], batch[1]}).
-		Return(0, errors.New("route fail")).Once()
-	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[2]}).Return(1, nil).Once()
+		Return(errors.New("route fail")).Once()
+	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[2]}).Return(nil).Once()
 	// Only e3 is marked; A's group never succeeded this round.
 	s.repository.On("MarkPublished", mock.Anything, []string{"e3"}, mock.Anything).Return(nil).Once()
 
@@ -85,15 +85,13 @@ func (s *RelaySuite) TestPublishBatchFailingGroupDoesNotBlockOtherEntities() {
 	s.repository.AssertExpectations(s.T())
 }
 
-func (s *RelaySuite) TestPublishBatchPartialPrefixWithinGroup() {
+func (s *RelaySuite) TestPublishBatchFailingGroupMarksNothingInThatGroup() {
 	batch := []EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "A")}
 	s.repository.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
-	s.sink.On("Publish", mock.Anything, batch).Return(2, errors.New("broker down")).Once()
-	s.repository.On("MarkPublished", mock.Anything, []string{"e1", "e2"}, mock.Anything).Return(nil).Once()
+	s.sink.On("Publish", mock.Anything, batch).Return(errors.New("broker down")).Once()
 
 	logger := &mockLogger{}
-	logger.On("Info", "Published event").Twice()
-	logger.On("Warn", "Failed to publish event, will retry").Once()
+	logger.On("Warn", "Failed to publish events, will retry").Once()
 	r, err := NewRelay(s.repository, s.sink, s.locker, logger, testRelayConfig())
 	s.Require().NoError(err)
 	s.r = r
@@ -101,8 +99,9 @@ func (s *RelaySuite) TestPublishBatchPartialPrefixWithinGroup() {
 	published, err := s.r.publishBatch(context.Background())
 
 	s.Require().NoError(err)
-	s.Equal(2, published)
+	s.Equal(0, published)
 	logger.AssertExpectations(s.T())
+	s.repository.AssertNotCalled(s.T(), "MarkPublished", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestGroupByEntity(t *testing.T) {
@@ -140,7 +139,7 @@ func (s *RelaySuite) TestTickDrainsWhileFullBatch() {
 	}
 	s.repository.On("ListUnpublished", mock.Anything, 10).Return(full, nil).Once()
 	s.repository.On("ListUnpublished", mock.Anything, 10).Return([]EventEnvelope{}, nil).Once()
-	s.sink.On("Publish", mock.Anything, mock.Anything).Return(10, nil)
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil)
 	s.repository.On("MarkPublished", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	s.r.tick(context.Background())
