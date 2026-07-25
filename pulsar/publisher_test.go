@@ -96,21 +96,22 @@ func (s *PublisherSuite) TestAggregatesSendErrors() {
 }
 
 // TestPartialFailureReturnsLeadingRun pins the index-attributed error slice: a
-// failure on the second send must not be reported for the first, which succeeded.
+// failure on the first send with the second succeeding must still report 0
+// published, not the total success count, so the caller never marks past a gap.
 func (s *PublisherSuite) TestPartialFailureReturnsLeadingRun() {
 	prod := &mockProducer{}
 	prod.On("SendAsync", mock.Anything, mock.MatchedBy(func(m *pulsar.ProducerMessage) bool {
 		return m.Key == "e1"
-	}), mock.Anything).Return(nil)
+	}), mock.Anything).Return(errors.New("boom"))
 	prod.On("SendAsync", mock.Anything, mock.MatchedBy(func(m *pulsar.ProducerMessage) bool {
 		return m.Key == "e2"
-	}), mock.Anything).Return(errors.New("boom"))
+	}), mock.Anything).Return(nil)
 	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
 	p := NewPublisher(s.reg)
 
 	n, err := p.Publish(context.Background(), twoEnvelopes("order.created"))
 	s.Error(err)
-	s.Equal(1, n)
+	s.Equal(0, n, "first envelope failed, so nothing counts as a delivered prefix even though the second succeeded")
 }
 
 func (s *PublisherSuite) TestEmptyIsNoop() {
