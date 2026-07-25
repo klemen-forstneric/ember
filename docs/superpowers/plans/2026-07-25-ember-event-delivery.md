@@ -17,7 +17,7 @@
 - Tests use `testify/suite` with `mock.Mock` doubles. Test doubles and helpers stay unexported and live in the package's `mocks_test.go` or the canonical `*_test.go` for the unit.
 - Keep comments minimal — a terse one-liner only where the code is genuinely non-obvious. No paragraph rationale blocks.
 - Conventional Commits for every commit message.
-- **Resolved open decision 1:** the relay's drain-side interface is named `RelayRepository`, exported, declared in core.
+- **Resolved open decision 1:** there is one outbox interface. `EventRepository` grows `ListUnpublished` and `MarkPublished` instead of gaining a sibling, so `AtLeastOnce` requires a drainable outbox at compile time. mongo's package-local `eventRepository` is deleted, not promoted.
 - **Resolved open decision 2:** `RetryingSink` defaults `MaxElapsedTime` to `30 * time.Second` when zero. The old `-1` default (zero retries) is dropped.
 - This is a breaking library change. Consuming services are not updated by this plan.
 
@@ -607,8 +607,9 @@ The poller is backend-agnostic — it needs only `ListUnpublished`/`MarkPublishe
 
 **Files:**
 - Create: `relay.go`
+- Modify: `event.go:20-23` (widen `EventRepository`)
 - Create: `relay_test.go`
-- Modify: `mocks_test.go` (append relay doubles)
+- Modify: `mocks_test.go` (extend `mockEventRepository`, append relay doubles)
 - Modify: `mongo/event_repository.go:16` (comment)
 - Delete: `mongo/notifier.go`
 - Delete: `mongo/notifier_test.go`
@@ -616,19 +617,14 @@ The poller is backend-agnostic — it needs only `ListUnpublished`/`MarkPublishe
 
 **Interfaces:**
 - Consumes: `ember.Sink` (Task 2), `ember.Locker` (Task 1).
-- Produces: `ember.RelayRepository` interface with `ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error)` and `MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error`; `ember.RelayConfig` struct with `IdleInterval`, `BatchSize`, `LockKey`, `LockTTL`, `Retention`; `ember.NewRelay(r RelayRepository, s Sink, l Locker, log LoggerCtx, cfg RelayConfig) *Relay` with methods `Run(ctx context.Context)`, `Close() error`, and unexported `publishBatch(ctx context.Context) (int, error)` / `tick(ctx context.Context)`.
+- Produces: `ember.EventRepository` widened to `Save(ctx context.Context, envelopes []EventEnvelope) error`, `ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error)`, `MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error`; `ember.RelayConfig` struct with `IdleInterval`, `BatchSize`, `LockKey`, `LockTTL`, `Retention`; `ember.NewRelay(r EventRepository, s Sink, l Locker, log LoggerCtx, cfg RelayConfig) *Relay` with methods `Run(ctx context.Context)`, `Close() error`, and unexported `publishBatch(ctx context.Context) (int, error)` / `tick(ctx context.Context)`.
 
 - [ ] **Step 1: Add the test doubles**
 
-Append to `mocks_test.go`:
+Extend the existing `mockEventRepository` in `mocks_test.go` by appending its two drain methods next to the current `Save`:
 
 ```go
-// mockRelayRepository is a testify mock for RelayRepository.
-type mockRelayRepository struct {
-	mock.Mock
-}
-
-func (m *mockRelayRepository) ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error) {
+func (m *mockEventRepository) ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error) {
 	args := m.Called(ctx, limit)
 	var envs []EventEnvelope
 	if v := args.Get(0); v != nil {
@@ -637,10 +633,14 @@ func (m *mockRelayRepository) ListUnpublished(ctx context.Context, limit int) ([
 	return envs, args.Error(1)
 }
 
-func (m *mockRelayRepository) MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error {
+func (m *mockEventRepository) MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error {
 	return m.Called(ctx, ids, expiresAt).Error(0)
 }
+```
 
+Then append the remaining doubles to the same file:
+
+```go
 // mockSink is a testify mock for Sink.
 type mockSink struct {
 	mock.Mock
@@ -728,7 +728,7 @@ func testRelayConfig() RelayConfig {
 
 type RelaySuite struct {
 	suite.Suite
-	repository *mockRelayRepository
+	repository *mockEventRepository
 	sink       *mockSink
 	locker     *mockLocker
 	r          *Relay
@@ -739,7 +739,7 @@ func TestRelaySuite(t *testing.T) {
 }
 
 func (s *RelaySuite) SetupTest() {
-	s.repository = &mockRelayRepository{}
+	s.repository = &mockEventRepository{}
 	s.sink = &mockSink{}
 	s.locker = &mockLocker{}
 	s.r = NewRelay(s.repository, s.sink, s.locker, NopLogger, testRelayConfig())
@@ -888,7 +888,24 @@ func (s *RelaySuite) TestCloseIsIdempotent() {
 Run: `go test . -run TestRelaySuite -v`
 Expected: FAIL with `undefined: RelayConfig` and `undefined: NewRelay`
 
-- [ ] **Step 4: Create Relay**
+- [ ] **Step 4: Widen EventRepository**
+
+In `event.go`, replace the `EventRepository` declaration (lines 20-23):
+
+```go
+// EventRepository is the outbox: the durable write side plus the drain side the
+// Relay uses. AtLeastOnce requires all three, so an outbox nothing can drain is
+// not a wireable configuration.
+type EventRepository interface {
+	Save(ctx context.Context, envelopes []EventEnvelope) error
+	ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error)
+	MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error
+}
+```
+
+`event.go` already imports `context` and `time`.
+
+- [ ] **Step 5: Create Relay**
 
 Create `relay.go`:
 
@@ -912,16 +929,10 @@ type RelayConfig struct {
 	Retention    time.Duration // published_at + Retention → expires_at (TTL)
 }
 
-// RelayRepository is the drain side of the outbox.
-type RelayRepository interface {
-	ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error)
-	MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error
-}
-
 // Relay drains the outbox to the Sink. It is the sole publisher under the
 // AtLeastOnce guarantee.
 type Relay struct {
-	repository RelayRepository
+	repository EventRepository
 	sink       Sink
 	locker     Locker
 	logger     LoggerCtx
@@ -930,7 +941,7 @@ type Relay struct {
 	closeOnce  sync.Once
 }
 
-func NewRelay(r RelayRepository, s Sink, l Locker, log LoggerCtx, cfg RelayConfig) *Relay {
+func NewRelay(r EventRepository, s Sink, l Locker, log LoggerCtx, cfg RelayConfig) *Relay {
 	if cfg.IdleInterval <= 0 {
 		cfg.IdleInterval = 200 * time.Millisecond
 	}
@@ -1055,12 +1066,12 @@ func (r *Relay) Close() error {
 }
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 6: Run tests to verify they pass**
 
 Run: `go test . -run TestRelaySuite -v`
 Expected: PASS, eight tests.
 
-- [ ] **Step 6: Delete the mongo notifier**
+- [ ] **Step 7: Delete the mongo notifier**
 
 ```bash
 git rm mongo/notifier.go mongo/notifier_test.go mongo/mocks_test.go
@@ -1074,32 +1085,32 @@ Then update the stale comment in `mongo/event_repository.go:16` from `// driven 
 // driven by the relay (ember.Relay).
 ```
 
-- [ ] **Step 7: Run the full build and suite**
+- [ ] **Step 8: Run the full build and suite**
 
 Run: `go build ./... && go test ./...`
 Expected: PASS. `mongo` retains its `EventRepository`, `EntityRepository`, `Transactor`, and `ensure` suites.
 
-- [ ] **Step 8: Verify both backends satisfy RelayRepository**
+- [ ] **Step 9: Verify both backends satisfy EventRepository**
 
 Add to `mongo/event_repository.go` after the `EventRepository` type declaration:
 
 ```go
-var _ ember.RelayRepository = (*EventRepository)(nil)
+var _ ember.EventRepository = (*EventRepository)(nil)
 ```
 
 Add the equivalent to `postgres/event_repository.go` after its `EventRepository` type declaration:
 
 ```go
-var _ ember.RelayRepository = (*EventRepository)(nil)
+var _ ember.EventRepository = (*EventRepository)(nil)
 ```
 
 Run: `go build ./...`
-Expected: PASS. If either fails, the interface signature in `relay.go` does not match the repositories and must be reconciled before continuing.
+Expected: PASS. If either fails, the widened interface in `event.go` does not match the repositories and must be reconciled before continuing.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add relay.go relay_test.go mocks_test.go mongo/ postgres/event_repository.go
+git add relay.go relay_test.go event.go mocks_test.go mongo/ postgres/event_repository.go
 git commit -m "refactor: promote mongo.Notifier to backend-agnostic ember.Relay"
 ```
 

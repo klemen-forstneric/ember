@@ -197,11 +197,6 @@ retries indefinitely.
 `mongo.Notifier` moves to core as `Relay`, backend-agnostic, poller unchanged:
 
 ```go
-type RelayRepository interface {
-    ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error)
-    MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error
-}
-
 type RelayConfig struct {
     IdleInterval time.Duration // idle poll cadence (jittered per replica)
     BatchSize    int           // events fetched per round
@@ -210,7 +205,7 @@ type RelayConfig struct {
     Retention    time.Duration // published_at + Retention → expires_at (TTL)
 }
 
-func NewRelay(r RelayRepository, s Sink, l Locker, log LoggerCtx, cfg RelayConfig) *Relay
+func NewRelay(r EventRepository, s Sink, l Locker, log LoggerCtx, cfg RelayConfig) *Relay
 func (r *Relay) Run(ctx context.Context)
 func (r *Relay) Close() error
 ```
@@ -220,9 +215,9 @@ failure isolation (`failed[e.EntityID]` skips later events for an entity whose e
 failed) that preserves per-entity order. `Notify` is deleted along with the interface it
 existed to satisfy.
 
-`postgres.EventRepository` already satisfies `RelayRepository`, so a postgres relay becomes
-wiring-only — still gated on the ordering fix, which must land before any relay drains that
-outbox.
+`postgres.EventRepository` already satisfies `EventRepository` in full, so a postgres relay
+becomes wiring-only — still gated on the ordering fix, which must land before any relay
+drains that outbox.
 
 ### Locker moves to core
 
@@ -267,16 +262,27 @@ Both in core. `pulsar.Publisher` and `kafka.Publisher` implement `Sink`;
 `pulsar.Subscriber` and `kafka.Subscriber` implement `Source`. `Subscriber`'s field and
 parameter names follow.
 
-### Interface split
+### One outbox interface
+
+`EventRepository` grows the drain side rather than gaining a sibling:
 
 ```go
-type EventRepository interface { Save(ctx context.Context, envelopes []EventEnvelope) error }
+type EventRepository interface {
+    Save(ctx context.Context, envelopes []EventEnvelope) error
+    ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error)
+    MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error
+}
 ```
 
-`EventRepository` stays the write-side interface (what `AtLeastOnce` needs).
-`RelayRepository` is the drain side. Both mongo and postgres event repositories already
-satisfy both — this promotes mongo's package-local `eventRepository` into core so the relay
-is backend-agnostic.
+The narrow-interface idiom would declare each half at its consumption site — `Save` for
+`AtLeastOnce`, the drain pair for `Relay`. Rejected: it makes a `Save`-only repository wired
+to `AtLeastOnce` a legal configuration, and that configuration accumulates events nobody ever
+delivers. Same silent-failure class as the old `mongo.EventRepository` + `noop.Notifier`
+pairing. `AtLeastOnce` requiring a *drainable* outbox is the guarantee stated in the type.
+
+Nothing implements `Save` alone once `noop.EventRepository` is deleted, and both mongo and
+postgres repositories already implement all three. mongo's package-local `eventRepository`
+is deleted rather than promoted — it was a duplicate of what core should have declared.
 
 ## Deletions and renames
 
@@ -336,7 +342,8 @@ which is inherent to immediate delivery and documented rather than prevented.
 ## Testing
 
 - `mongo/notifier_test.go` becomes `relay_test.go` in core, against a mocked
-  `RelayRepository`, `Sink`, and `Locker`. Existing coverage carries over: batch drain,
+  `EventRepository`, `Sink`, and `Locker` — one mock serves the publisher and relay suites.
+  Existing coverage carries over: batch drain,
   per-entity failure isolation, lock contention, interval jitter, `Close`.
 - `publisher_test.go` covers both guarantees: `AtLeastOnce` persists and returns no
   delivery; `BestEffort` persists nothing and returns a delivery that pushes.
@@ -366,10 +373,7 @@ which is inherent to immediate delivery and documented rather than prevented.
 
 ## Open decisions
 
-1. **`RelayRepository` name.** Named for its consumer, which reads oddly inside package
-   `ember`. Alternatives: `UnpublishedEvents`, or leave it unexported, since callers only
-   pass a `mongo.EventRepository` and never name the type.
-2. **`ext.RetryingSink` default.** `MaxElapsedTime` currently defaults to `-1`, which in
+1. **`ext.RetryingSink` default.** `MaxElapsedTime` currently defaults to `-1`, which in
    backoff/v4 stops before the first retry — a type called "Retrying" that does not retry
    unless configured. Now that the error reaches `Publish`, it should get a real default
    rather than a silent zero.
