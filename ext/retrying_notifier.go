@@ -19,26 +19,22 @@ type RetryingeNotifierConfig struct {
 	MaxElapsedTime time.Duration
 }
 
-type Transport interface {
-	Publish(ctx context.Context, envelopes []ember.EventEnvelope) error
-}
-
 type RetryingNotifier struct {
-	config    RetryingeNotifierConfig
-	transport Transport
-	logger    ember.LoggerCtx
+	config RetryingeNotifierConfig
+	sink   ember.Sink
+	logger ember.LoggerCtx
 }
 
-func NewRetryingNotifier(c RetryingeNotifierConfig, t Transport, l ember.LoggerCtx) *RetryingNotifier {
+func NewRetryingNotifier(c RetryingeNotifierConfig, s ember.Sink, l ember.LoggerCtx) *RetryingNotifier {
 	if c.MaxElapsedTime == 0 {
 		// With -1 we disable indefinite retries.
 		c.MaxElapsedTime = -1
 	}
 
 	return &RetryingNotifier{
-		config:    c,
-		transport: t,
-		logger:    l,
+		config: c,
+		sink:   s,
+		logger: l,
 	}
 }
 
@@ -47,7 +43,7 @@ func (n *RetryingNotifier) Notify(ctx context.Context, envelopes []ember.EventEn
 
 	publish := func() error {
 		attempt++
-		return n.transport.Publish(ctx, envelopes)
+		return n.sink.Publish(ctx, envelopes)
 	}
 
 	b := backoff.NewExponentialBackOff()

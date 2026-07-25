@@ -7,7 +7,6 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/klemen-forstneric/ember"
-	"github.com/klemen-forstneric/ember/middleware"
 )
 
 type mockEventRepository struct{ mock.Mock }
@@ -25,19 +24,19 @@ func (m *mockEventRepository) MarkPublished(ctx context.Context, ids []string, e
 	return m.Called(ctx, ids, expiresAt).Error(0)
 }
 
-type mockTransport struct{ mock.Mock }
+type mockSink struct{ mock.Mock }
 
-func (m *mockTransport) Publish(ctx context.Context, envelopes []ember.EventEnvelope) error {
+func (m *mockSink) Publish(ctx context.Context, envelopes []ember.EventEnvelope) error {
 	return m.Called(ctx, envelopes).Error(0)
 }
 
 type mockLocker struct{ mock.Mock }
 
-func (m *mockLocker) TryLock(ctx context.Context, key string, ttl time.Duration) (middleware.Lock, error) {
+func (m *mockLocker) TryLock(ctx context.Context, key string, ttl time.Duration) (ember.Lock, error) {
 	args := m.Called(ctx, key, ttl)
-	var lock middleware.Lock
+	var lock ember.Lock
 	if v := args.Get(0); v != nil {
-		lock = v.(middleware.Lock)
+		lock = v.(ember.Lock)
 	}
 	return lock, args.Error(1)
 }

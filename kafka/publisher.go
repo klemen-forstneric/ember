@@ -72,3 +72,5 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 func (p *Publisher) Close() error {
 	return p.w.Close()
 }
+
+var _ ember.Sink = (*Publisher)(nil)

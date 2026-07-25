@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/klemen-forstneric/ember"
-	"github.com/klemen-forstneric/ember/ext"
-	"github.com/klemen-forstneric/ember/middleware"
 )
 
 // NotifierConfig
@@ -30,15 +28,15 @@ type eventRepository interface {
 // Notifier
 type Notifier struct {
 	repository eventRepository
-	transport  ext.Transport
-	locker     middleware.Locker
+	sink       ember.Sink
+	locker     ember.Locker
 	logger     ember.LoggerCtx
 	cfg        NotifierConfig
 	done       chan struct{}
 	closeOnce  sync.Once
 }
 
-func NewNotifier(store eventRepository, transport ext.Transport, locker middleware.Locker, logger ember.LoggerCtx, cfg NotifierConfig) *Notifier {
+func NewNotifier(store eventRepository, sink ember.Sink, locker ember.Locker, logger ember.LoggerCtx, cfg NotifierConfig) *Notifier {
 	if cfg.IdleInterval <= 0 {
 		cfg.IdleInterval = 200 * time.Millisecond
 	}
@@ -57,7 +55,7 @@ func NewNotifier(store eventRepository, transport ext.Transport, locker middlewa
 
 	return &Notifier{
 		repository: store,
-		transport:  transport,
+		sink:       sink,
 		locker:     locker,
 		logger:     logger,
 		cfg:        cfg,
@@ -81,7 +79,7 @@ func (n *Notifier) publishBatch(ctx context.Context) (int, error) {
 		if failed[e.EntityID] {
 			continue
 		}
-		if err := n.transport.Publish(ctx, []ember.EventEnvelope{e}); err != nil {
+		if err := n.sink.Publish(ctx, []ember.EventEnvelope{e}); err != nil {
 			failed[e.EntityID] = true
 			n.logger.Warn(ctx, "Failed to publish event, will retry",
 				"error", err, "eventId", e.ID, "type", e.Event.Type, "entity_id", e.EntityID)

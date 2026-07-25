@@ -34,7 +34,7 @@ func testConfig() NotifierConfig {
 type NotifierSuite struct {
 	suite.Suite
 	repository *mockEventRepository
-	transport  *mockTransport
+	sink       *mockSink
 	locker     *mockLocker
 	n          *Notifier
 }
@@ -45,9 +45,9 @@ func TestNotifierSuite(t *testing.T) {
 
 func (s *NotifierSuite) SetupTest() {
 	s.repository = &mockEventRepository{}
-	s.transport = &mockTransport{}
+	s.sink = &mockSink{}
 	s.locker = &mockLocker{}
-	s.n = NewNotifier(s.repository, s.transport, s.locker, ember.NopLogger, testConfig())
+	s.n = NewNotifier(s.repository, s.sink, s.locker, ember.NopLogger, testConfig())
 }
 
 func (s *NotifierSuite) TestPublishBatchPublishesInOrderAndMarks() {
@@ -55,7 +55,7 @@ func (s *NotifierSuite) TestPublishBatchPublishesInOrderAndMarks() {
 	s.repository.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
 
 	var order []string
-	s.transport.On("Publish", mock.Anything, mock.Anything).Return(nil).Run(func(a mock.Arguments) {
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Run(func(a mock.Arguments) {
 		envs := a.Get(1).([]ember.EventEnvelope)
 		order = append(order, envs[0].ID)
 	})
@@ -74,10 +74,10 @@ func (s *NotifierSuite) TestPublishBatchPerEntityHeadOfLine() {
 	batch := []ember.EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "B")}
 	s.repository.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
 
-	s.transport.On("Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
+	s.sink.On("Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
 		return e[0].ID == "e1"
 	})).Return(errors.New("route fail"))
-	s.transport.On("Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
+	s.sink.On("Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
 		return e[0].ID == "e3"
 	})).Return(nil)
 	// Only e3 is marked; e1 (failed) and e2 (blocked behind e1) stay pending.
@@ -87,7 +87,7 @@ func (s *NotifierSuite) TestPublishBatchPerEntityHeadOfLine() {
 
 	s.Require().NoError(err)
 	s.Equal(1, published)
-	s.transport.AssertNotCalled(s.T(), "Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
+	s.sink.AssertNotCalled(s.T(), "Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
 		return e[0].ID == "e2"
 	}))
 	s.repository.AssertExpectations(s.T())
@@ -97,10 +97,10 @@ func (s *NotifierSuite) TestPublishBatchLogsPublishedAndRetry() {
 	batch := []ember.EventEnvelope{evt("e1", "A"), evt("e2", "B")}
 	s.repository.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
 
-	s.transport.On("Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
+	s.sink.On("Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
 		return e[0].ID == "e1"
 	})).Return(nil)
-	s.transport.On("Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
+	s.sink.On("Publish", mock.Anything, mock.MatchedBy(func(e []ember.EventEnvelope) bool {
 		return e[0].ID == "e2"
 	})).Return(errors.New("transport down"))
 	s.repository.On("MarkPublished", mock.Anything, []string{"e1"}, mock.Anything).Return(nil).Once()
@@ -108,7 +108,7 @@ func (s *NotifierSuite) TestPublishBatchLogsPublishedAndRetry() {
 	logger := &mockLogger{}
 	logger.On("Info", "Published event").Once()
 	logger.On("Warn", "Failed to publish event, will retry").Once()
-	s.n = NewNotifier(s.repository, s.transport, s.locker, logger, testConfig())
+	s.n = NewNotifier(s.repository, s.sink, s.locker, logger, testConfig())
 
 	published, err := s.n.publishBatch(context.Background())
 
@@ -144,7 +144,7 @@ func (s *NotifierSuite) TestTickDrainsWhileFullBatch() {
 	}
 	s.repository.On("ListUnpublished", mock.Anything, 10).Return(full, nil).Once()
 	s.repository.On("ListUnpublished", mock.Anything, 10).Return([]ember.EventEnvelope{}, nil).Once()
-	s.transport.On("Publish", mock.Anything, mock.Anything).Return(nil)
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil)
 	s.repository.On("MarkPublished", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	s.n.tick(context.Background())

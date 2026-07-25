@@ -33,8 +33,8 @@ type Subscription interface {
 	Handle(ctx context.Context, e *ReceivedEvent) error
 }
 
-// Transport
-type Transport interface {
+// Source receives event envelopes from the broker.
+type Source interface {
 	Subscribe(ctx context.Context, name string) (<-chan AckableEventEnvelope, error)
 	Stop()
 }
@@ -42,22 +42,22 @@ type Transport interface {
 // Subscriber
 type Subscriber struct {
 	marshaler EventMarshaler
-	transport Transport
+	source    Source
 	consumer  Consumer
 	logger    LoggerCtx
 }
 
-func NewSubscriber(m EventMarshaler, t Transport, c Consumer, l LoggerCtx) *Subscriber {
+func NewSubscriber(m EventMarshaler, s Source, c Consumer, l LoggerCtx) *Subscriber {
 	return &Subscriber{
 		marshaler: m,
-		transport: t,
+		source:    s,
 		consumer:  c,
 		logger:    l,
 	}
 }
 
 func (s *Subscriber) Subscribe(ctx context.Context, sub Subscription, m ...SubscriptionMiddleware) error {
-	ch, err := s.transport.Subscribe(ctx, sub.Name())
+	ch, err := s.source.Subscribe(ctx, sub.Name())
 	if err != nil {
 		return err
 	}
@@ -109,6 +109,6 @@ func (s *Subscriber) Subscribe(ctx context.Context, sub Subscription, m ...Subsc
 }
 
 func (s *Subscriber) Stop() {
-	s.transport.Stop()
+	s.source.Stop()
 	s.consumer.Stop()
 }

@@ -10,10 +10,10 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-// Subscriber is the Kafka implementation of ember.Transport. It resolves a
+// Subscriber is the Kafka implementation of ember.Source. It resolves a
 // subscription to one consumer-group reader and runs an offset/retry engine
 // that makes per-message Ack/Nack correct under any downstream consumer.
-var _ ember.Transport = (*Subscriber)(nil)
+var _ ember.Source = (*Subscriber)(nil)
 
 // consumerRegistry resolves the reader for a subscription name. Get returns an
 // error for an unknown subscription.

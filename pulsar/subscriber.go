@@ -8,10 +8,10 @@ import (
 	"github.com/klemen-forstneric/ember"
 )
 
-// Subscriber is the Pulsar implementation of ember.Transport. It resolves a
+// Subscriber is the Pulsar implementation of ember.Source. It resolves a
 // subscription name to one or more consumers via the registry and fans their
 // messages into a single channel.
-var _ ember.Transport = (*Subscriber)(nil)
+var _ ember.Source = (*Subscriber)(nil)
 
 // consumerRegistry resolves the consumers for a subscription name (fan-in:
 // one subscription may map to several consumers). Get returns an error for an
