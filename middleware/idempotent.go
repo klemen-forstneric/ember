@@ -10,15 +10,9 @@ import (
 
 var ErrLockerUnavailable = errors.New("ember/middleware: locker unavailable")
 
-// Lock
-type Lock interface {
-	Release(ctx context.Context) error
-}
+type Lock = ember.Lock
 
-// Locker
-type Locker interface {
-	TryLock(ctx context.Context, key string, ttl time.Duration) (Lock, error)
-}
+type Locker = ember.Locker
 
 func Idempotent(keyPrefix string, ttl time.Duration, locker Locker, l ember.LoggerCtx) ember.SubscriptionMiddleware {
 	return func(next ember.HandleFunc) ember.HandleFunc {

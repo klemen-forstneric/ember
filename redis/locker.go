@@ -9,6 +9,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/klemen-forstneric/ember"
 	"github.com/klemen-forstneric/ember/middleware"
 )
 
@@ -76,3 +77,5 @@ type lock struct {
 func (l *lock) Release(ctx context.Context) error {
 	return releaseScript.Run(ctx, l.client, []string{l.key}, l.token).Err()
 }
+
+var _ ember.Locker = (*Locker)(nil)
