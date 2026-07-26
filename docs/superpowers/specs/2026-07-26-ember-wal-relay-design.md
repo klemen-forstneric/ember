@@ -143,7 +143,20 @@ has no metadata field — copying it verbatim would make every publish fail.
    decoded and appended; other prefixes are skipped. `CommitMessage` triggers
    `Sink.Publish(buffer)`, then advances `logPos` to the commit LSN and sends a standby
    status update.
-5. `PrimaryKeepaliveMessage` with `ReplyRequested` triggers an immediate standby update.
+5. `PrimaryKeepaliveMessage`: when **nothing is pending** — the transaction buffer is empty
+   and no publish retry is in flight — adopt `ServerWALEnd` if it is ahead of `logPos`.
+   `ReplyRequested` additionally triggers an immediate standby update.
+
+Step 5's advance is not an optimisation, it is what keeps the slot from pinning WAL
+forever. pgoutput emits `Begin` lazily, only when it has a change to send, so transactions
+that produce nothing for this stream — another service's writes, autovacuum, DDL — generate
+no messages at all, and there is no `CommitMessage` to advance on. Without adopting
+`ServerWALEnd`, `restart_lsn` stays parked at the last published event and WAL accumulates
+behind a perfectly healthy relay.
+
+The pending guard is what makes it safe: adopting `ServerWALEnd` mid-transaction or during
+a publish retry would advance past our own unpublished events, reintroducing the loss bug
+this design exists to avoid.
 
 Plugin arguments are deliberately narrower than `pg-logrepl`'s:
 
@@ -245,6 +258,29 @@ type RelayConfig struct {
 (`pg_logical_emit_message` is ordinary SQL), plus one `*pgconn.PgConn` on
 `replication=database`, held only by the leader.
 
+### Multiple services on one Postgres instance
+
+Replication slots are independent objects, each with its own `restart_lsn` and
+`confirmed_flush_lsn`, so `order_events_slot` and `wallet_events_slot` coexist without
+interfering. Independent cursors per service work, subject to three constraints.
+
+**Prefer a database per service.** Slots are per-database objects, and logical decoding
+messages are not filtered by slot or publication — prefix filtering happens client-side in
+the relay loop. Services sharing one database therefore each decode and discard every other
+service's messages, so decode work and network from the primary scale with the number of
+services. A database per service on a shared instance removes this entirely. Where a
+database is genuinely shared, each service still needs a distinct slot name *and* a distinct
+message prefix.
+
+**Sizing.** `max_replication_slots` and `max_wal_senders` must each be at least the number
+of services on the instance, plus any physical replication or other subscribers.
+
+**Privilege isolation.** `REPLICATION` is a cluster-wide role attribute, not a per-database
+grant. A service role holding it can open a replication connection against any database it
+can connect to and stream that database's events. On a shared instance, constrain this with
+per-database roles and restricted `CONNECT` privileges so a service can only reach its own
+database.
+
 ## Testing
 
 `pglogrepl` parsing, pgoutput, and slot mechanics are third-party and get no unit tests.
@@ -278,7 +314,9 @@ type replConn interface {
 
 The seam is justified because the assertions are about ember's policy, not the driver's: a
 failing `Sink` never advances `logPos`; standby updates keep flowing during retry; backoff
-caps; `Close` during a retry exits promptly.
+caps; `Close` during a retry exits promptly. It also covers the keepalive pending-guard — a
+keepalive carrying a higher `ServerWALEnd` advances `logPos` when idle, and must **not**
+advance it mid-transaction or while a publish is being retried.
 
 **Unit — codec round-trip.** `EventRepository`'s encode against the relay's decode,
 asserting `Metadata` survives.
@@ -291,6 +329,10 @@ is unavailable, mirroring `mongo/sort_test.go:19`:
 - A publication with no tables delivers messages
 - Stop relay → save → restart → events written while down are delivered
 - Two relays: the second gets `55006` and stands by; kill the first, the second takes over
+- Unrelated write traffic in the same database advances the relay's `confirmed_flush_lsn`
+  rather than pinning it — the regression test for the keepalive cursor-advance bug
+- Two relays with distinct slots and prefixes on one database: each delivers only its own
+  events, and each cursor advances independently
 
 Placement follows existing conventions: `postgres/wal/relay_test.go` and
 `event_repository_test.go`, `suite.Suite`, `testify/mock` doubles kept unexported.
@@ -324,6 +366,11 @@ decorative.
 
 5. **Vestigial `Notify`.** `LogReplNotifier.Notify` is a no-op that exists only to satisfy
    an interface. `wal.Relay` exposes `Run`/`Close` and nothing else.
+
+6. **Keepalives never advance the cursor.** The keepalive branch
+   (`log_repl_notifier.go:140-142`) only resets the deadline, discarding `ServerWALEnd`.
+   Any WAL the relay does not care about therefore pins `restart_lsn` indefinitely. We adopt
+   `ServerWALEnd` whenever nothing is pending, as pglogrepl's own example does.
 
 ## Out of scope
 
