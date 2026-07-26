@@ -25,7 +25,8 @@ type atLeastOnce struct {
 }
 
 // AtLeastOnce persists envelopes to the outbox inside the caller's transaction.
-// A Relay draining that outbox is the sole publisher.
+// A relay is the sole publisher: PollingRelay for a table-backed outbox, or
+// postgres/wal.Relay for a WAL-backed one.
 func AtLeastOnce(r EventRepository) Guarantee {
 	return atLeastOnce{repo: r}
 }

@@ -17,13 +17,10 @@ type EventMarshaler interface {
 	Unmarshal(ctx context.Context, e *MarshaledEvent) (Event, error)
 }
 
-// EventRepository is the outbox: the durable write side plus the drain side the
-// Relay uses. AtLeastOnce requires all three, so an outbox nothing can drain is
-// not a wireable configuration.
+// EventRepository is the outbox's durable write side. Save runs inside the
+// caller's transaction.
 type EventRepository interface {
 	Save(ctx context.Context, envelopes []EventEnvelope) error
-	ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error)
-	MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error
 }
 
 // EventEnvelope

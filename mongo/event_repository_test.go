@@ -94,5 +94,8 @@ func (s *EventRepositorySuite) TestMarkPublishedRemovesFromPending() {
 	s.Equal([]string{"e2"}, ids(got), "published event must drop out of pending")
 }
 
-// Compile-time assertion that the repository satisfies the interface.
-var _ ember.EventRepository = (*EventRepository)(nil)
+// Compile-time assertion that the repository satisfies the interfaces.
+var (
+	_ ember.EventRepository        = (*EventRepository)(nil)
+	_ ember.PollingRelayRepository = (*EventRepository)(nil)
+)

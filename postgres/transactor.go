@@ -9,9 +9,9 @@ import (
 
 type txKey struct{}
 
-// conn is the subset of *sql.DB / *sql.Tx the repositories use, so a write
+// Conn is the subset of *sql.DB / *sql.Tx the repositories use, so a write
 // can run on whichever is active on the ctx.
-type conn interface {
+type Conn interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
@@ -30,7 +30,7 @@ func NewDB(pool *sql.DB) *DB {
 var _ ember.Transactor = (*DB)(nil)
 
 // Conn returns the transaction carried on ctx if one is active, else the pool.
-func (d *DB) Conn(ctx context.Context) conn {
+func (d *DB) Conn(ctx context.Context) Conn {
 	if tx, ok := ctx.Value(txKey{}).(*sql.Tx); ok {
 		return tx
 	}

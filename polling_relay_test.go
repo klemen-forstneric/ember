@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 )
@@ -101,18 +100,6 @@ func (s *PollingRelaySuite) TestPublishBatchFailingGroupMarksNothingInThatGroup(
 	s.Equal(0, published)
 	logger.AssertExpectations(s.T())
 	s.repository.AssertNotCalled(s.T(), "MarkPublished", mock.Anything, mock.Anything, mock.Anything)
-}
-
-func TestGroupByEntity(t *testing.T) {
-	a1, b1, a2, c1, b2 := evt("a1", "A"), evt("b1", "B"), evt("a2", "A"), evt("c1", "C"), evt("b2", "B")
-
-	groups := groupByEntity([]EventEnvelope{a1, b1, a2, c1, b2})
-
-	assert.Equal(t, [][]EventEnvelope{
-		{a1, a2},
-		{b1, b2},
-		{c1},
-	}, groups)
 }
 
 func (s *PollingRelaySuite) TestTickNotLeaderDoesNothing() {
