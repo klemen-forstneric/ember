@@ -8,9 +8,8 @@ import (
 )
 
 // Transactor runs work inside a mongo transaction. Reentrant: if the ctx already
-// carries a session (an outer WithinTx, or another framework's transaction such
-// as spark's Atomic middleware), it joins that transaction instead of starting a
-// nested one, which mongo forbids.
+// carries a session (an outer WithinTx), it joins that transaction instead of
+// starting a nested one, which mongo forbids.
 type Transactor struct {
 	client *mongo.Client
 }
