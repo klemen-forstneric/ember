@@ -97,13 +97,13 @@ func TestConn(t *testing.T) {
 	pg := NewDB(db)
 
 	// no tx on ctx -> returns the pool
-	require.Equal(t, conn(db), pg.Conn(context.Background()))
+	require.Equal(t, Conn(db), pg.Conn(context.Background()))
 
 	// tx on ctx -> returns that tx, not the pool
 	mock.ExpectBegin()
 	tx, err := db.Begin()
 	require.NoError(t, err)
-	require.Equal(t, conn(tx), pg.Conn(context.WithValue(context.Background(), txKey{}, tx)))
+	require.Equal(t, Conn(tx), pg.Conn(context.WithValue(context.Background(), txKey{}, tx)))
 
 	mock.ExpectRollback()
 	require.NoError(t, tx.Rollback())
