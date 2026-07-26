@@ -42,6 +42,7 @@ type fakeConn struct {
 	starts    int
 	creates   int
 	createErr error
+	sendErr   error
 	closed    bool
 }
 
@@ -92,8 +93,18 @@ func (c *fakeConn) ReceiveMessage(ctx context.Context) (pgproto3.BackendMessage,
 func (c *fakeConn) SendStandbyStatusUpdate(_ context.Context, u pglogrepl.StandbyStatusUpdate) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.sendErr != nil {
+		// A write that failed confirms nothing, so it must not be recorded.
+		return c.sendErr
+	}
 	c.standby = append(c.standby, u.WALWritePosition)
 	return nil
+}
+
+func (c *fakeConn) failSends(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sendErr = err
 }
 
 func (c *fakeConn) Close(context.Context) error {
@@ -357,6 +368,30 @@ func (s *RelaySuite) TestKeepalivesFlowDuringASlowPublish() {
 	}
 	s.Equal(pglogrepl.LSN(100), s.conn.maxPosition(), "cursor must advance once the publish succeeds")
 	s.assertNoSessionFailure()
+}
+
+// A keepalive write failing mid-publish costs a duplicate, never an event. The
+// goroutine only ever reports the frozen pre-batch position, so it confirms
+// nothing new; the advance that follows a successful publish is a write on the
+// same dead connection, so it fails too and the session ends with
+// confirmed_flush_lsn untouched — the batch is redelivered on the next dial.
+func (s *RelaySuite) TestKeepaliveFailureMidPublishDoesNotConfirmTheBatch() {
+	r := s.txn("e1", 100)
+	s.sink.On("Publish", mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) {
+			s.conn.failSends(errors.New("connection reset by peer"))
+			time.Sleep(3 * s.cfg.KeepAliveInterval)
+		}).
+		Return(nil).Once()
+
+	s.runFor(r, 300*time.Millisecond)
+
+	s.sink.AssertExpectations(s.T())
+	s.Equal(pglogrepl.LSN(0), s.conn.maxPosition(),
+		"a batch must never count as confirmed through a failed standby write")
+	s.Contains(s.logger.at("warn"), "Could not send standby update while publishing")
+	s.Contains(s.logger.at("error"), sessionFailureMsg,
+		"the dead connection must end the session so the batch is redelivered")
 }
 
 // Unrelated WAL produces no messages for us, so only the keepalive can move the
