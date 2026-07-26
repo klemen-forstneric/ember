@@ -57,7 +57,8 @@ func (m *mockEntityMarshaler[E]) Unmarshal(ctx context.Context, me *MarshaledEnt
 	return out, args.Error(1)
 }
 
-// mockEventRepository is a testify mock for EventRepository.
+// mockEventRepository is a testify double for the outbox, satisfying both
+// EventRepository and PollingRelayRepository.
 type mockEventRepository struct {
 	mock.Mock
 }

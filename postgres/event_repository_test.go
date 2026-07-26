@@ -97,5 +97,8 @@ func TestEventMarkPublishedEmptyIsNoop(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// Compile-time assertion that the repository satisfies the interface.
-var _ ember.EventRepository = (*EventRepository)(nil)
+// Compile-time assertion that the repository satisfies the interfaces.
+var (
+	_ ember.EventRepository        = (*EventRepository)(nil)
+	_ ember.PollingRelayRepository = (*EventRepository)(nil)
+)

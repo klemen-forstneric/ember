@@ -52,10 +52,16 @@ func validateRelayConfig(cfg PollingRelayConfig) error {
 	return nil
 }
 
+// PollingRelayRepository is the drain side of a table-backed outbox.
+type PollingRelayRepository interface {
+	ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error)
+	MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error
+}
+
 // PollingRelay drains the outbox to the Sink. It is the sole publisher under the
 // AtLeastOnce guarantee.
 type PollingRelay struct {
-	repository EventRepository
+	repository PollingRelayRepository
 	sink       Sink
 	locker     Locker
 	logger     LoggerCtx
@@ -64,7 +70,7 @@ type PollingRelay struct {
 	closeOnce  sync.Once
 }
 
-func NewPollingRelay(r EventRepository, s Sink, l Locker, log LoggerCtx, cfg PollingRelayConfig) (*PollingRelay, error) {
+func NewPollingRelay(r PollingRelayRepository, s Sink, l Locker, log LoggerCtx, cfg PollingRelayConfig) (*PollingRelay, error) {
 	if err := validateRelayConfig(cfg); err != nil {
 		return nil, err
 	}
