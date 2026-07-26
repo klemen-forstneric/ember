@@ -326,7 +326,14 @@ func (r *Relay) stream(ctx context.Context, conn replConn) error {
 // publish retries until the batch lands. It never gives up and never advances:
 // the event is a committed domain fact, so blocking is preferable to loss.
 // Recovery is a deploy, surfaced by slot lag.
+//
+// A Sink may block for longer than KeepAliveInterval — ext.RetryingSink spends
+// its own budget inside one call — so keepAlive holds the connection open for
+// the whole span rather than only between attempts.
 func (r *Relay) publish(ctx context.Context, conn replConn, batch []ember.EventEnvelope, logPos pglogrepl.LSN) error {
+	stop := r.keepAlive(ctx, conn, logPos)
+	defer stop()
+
 	backoff := min(initialRetryBackoff, r.cfg.MaxRetryBackoff)
 	for attempt := 1; ; attempt++ {
 		err := r.sink.Publish(ctx, batch)
@@ -341,8 +348,12 @@ func (r *Relay) publish(ctx context.Context, conn replConn, batch []ember.EventE
 		r.logger.Error(ctx, "Could not publish events; retrying", err,
 			"attempt", attempt, "events", len(batch), "event_ids", envelopeIDs(batch))
 
-		if err := r.waitAlive(ctx, conn, backoff, logPos); err != nil {
-			return err
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-r.done:
+			return errClosed
+		case <-time.After(backoff):
 		}
 		if backoff < r.cfg.MaxRetryBackoff {
 			backoff = min(backoff*2, r.cfg.MaxRetryBackoff)
@@ -350,30 +361,42 @@ func (r *Relay) publish(ctx context.Context, conn replConn, batch []ember.EventE
 	}
 }
 
-// waitAlive sleeps for d while keeping the replication connection alive at the
-// unadvanced position. Postgres drops a connection that stops sending standby
-// updates, so a plain sleep longer than KeepAliveInterval would kill the
-// session mid-retry.
-func (r *Relay) waitAlive(ctx context.Context, conn replConn, d time.Duration, logPos pglogrepl.LSN) error {
-	deadline := time.Now().Add(d)
-	for {
-		wait := min(time.Until(deadline), r.cfg.KeepAliveInterval)
-		if wait <= 0 {
-			return nil
+// keepAlive hands conn to a goroutine that reports logPos every
+// KeepAliveInterval until the returned stop is called. This is an ownership
+// transfer, not shared access: the caller must not touch conn until stop
+// returns, which is what keeps single-threaded use of a non-concurrency-safe
+// pgconn intact.
+//
+// The position is deliberately frozen — advancing it here would confirm events
+// the Sink has not accepted.
+func (r *Relay) keepAlive(ctx context.Context, conn replConn, logPos pglogrepl.LSN) (stop func()) {
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-time.After(r.cfg.KeepAliveInterval):
+			}
+			if err := conn.SendStandbyStatusUpdate(ctx, statusUpdate(logPos)); err != nil {
+				// The session is already lost; the stream loop surfaces it on its
+				// next use of conn.
+				r.logger.Warn(ctx, "Could not send standby update while publishing",
+					"error", err, "slot", r.cfg.SlotName)
+				return
+			}
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-r.done:
-			return errClosed
-		case <-time.After(wait):
-		}
-		if err := conn.SendStandbyStatusUpdate(ctx, statusUpdate(logPos)); err != nil {
-			return err
-		}
-		if !time.Now().Before(deadline) {
-			return nil
-		}
+	}()
+
+	return func() {
+		close(done)
+		wg.Wait()
 	}
 }
 

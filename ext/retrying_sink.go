@@ -25,9 +25,13 @@ const (
 	defaultMaxTries        = 3
 )
 
-// RetryingSink wraps a Sink with exponential-backoff retries. Intended for the
-// BestEffort guarantee — wrapping a Relay's Sink stalls the outbox drain while
-// its lock is held.
+// RetryingSink wraps a Sink with exponential-backoff retries.
+//
+// Under BestEffort it is the only retry there is. Wrapping PollingRelay's Sink
+// stalls the outbox drain while its lock is held. Wrapping wal.Relay's Sink is
+// fine — that relay keeps its replication connection alive across the call and
+// retries the batch forever regardless, so MaxTries only sets how fast a
+// transient failure is absorbed, not whether the events survive.
 type RetryingSink struct {
 	config RetryingSinkConfig
 	sink   ember.Sink

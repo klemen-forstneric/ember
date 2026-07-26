@@ -331,6 +331,34 @@ func (s *RelaySuite) TestKeepalivesContinueDuringRetry() {
 	}
 }
 
+// A Sink may block far longer than KeepAliveInterval inside a single call —
+// ext.RetryingSink spends its whole budget there. Postgres kills a replication
+// connection that goes quiet, so keepalives must flow during the call itself,
+// not merely between retries.
+func (s *RelaySuite) TestKeepalivesFlowDuringASlowPublish() {
+	blockFor := 5 * s.cfg.KeepAliveInterval
+	r := s.txn("e1", 100)
+
+	// Sampled on the relay goroutine; read after awaitStop, which happens-after.
+	var atStart, atEnd []pglogrepl.LSN
+	s.sink.On("Publish", mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) {
+			atStart = s.conn.positions()
+			time.Sleep(blockFor)
+			atEnd = s.conn.positions()
+		}).
+		Return(nil).Once()
+
+	s.runFor(r, blockFor+200*time.Millisecond)
+
+	s.Greater(len(atEnd), len(atStart), "no standby update was sent while the sink was blocked")
+	for _, p := range atEnd {
+		s.Equal(pglogrepl.LSN(0), p, "a keepalive confirmed a position the sink had not accepted")
+	}
+	s.Equal(pglogrepl.LSN(100), s.conn.maxPosition(), "cursor must advance once the publish succeeds")
+	s.assertNoSessionFailure()
+}
+
 // Unrelated WAL produces no messages for us, so only the keepalive can move the
 // cursor. Without this the slot pins WAL forever.
 func (s *RelaySuite) TestKeepaliveAdvancesCursorWhenIdle() {
