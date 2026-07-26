@@ -94,8 +94,12 @@ cfg   := wal.DefaultRelayConfig("svc")           // slot, publication, message p
 if err := wal.EnsurePublication(ctx, db, cfg.PublicationName); err != nil { ... }
 store := wal.NewEventRepository(db, cfg.MessagePrefix)
 pub   := ember.NewPublisher(ider, md, marshaler, ember.AtLeastOnce(store))
-relay := wal.NewRelay(cfg, replConn, sink, log)
+relay, err := wal.NewRelay(cfg, replConnString, sink, log) // DSN carries replication=database
 ```
+
+`NewRelay` takes a connection string rather than a connection because the relay
+re-dials: after connection loss, and after losing a slot-acquisition race where
+the standby closes its connection before sleeping.
 
 Deriving the store's prefix from the same `cfg` is what keeps the two in agreement.
 

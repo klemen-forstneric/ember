@@ -3,12 +3,17 @@ package wal
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 
+	"github.com/klemen-forstneric/ember"
 	"github.com/klemen-forstneric/ember/postgres"
 )
 
@@ -73,4 +78,268 @@ func TestEnsurePublicationIsIdempotent(t *testing.T) {
 	require.NoError(t,
 		pool.QueryRow(`SELECT count(*) FROM pg_publication_tables WHERE pubname = $1`, name).Scan(&count))
 	require.Equal(t, 0, count)
+}
+
+// replConnString adds replication=database to the base DSN.
+func replConnString() string {
+	sep := "&"
+	if !strings.Contains(testConnString(), "?") {
+		sep = "?"
+	}
+	return testConnString() + sep + "replication=database"
+}
+
+// collectingSink records every batch it is handed.
+type collectingSink struct {
+	mu      sync.Mutex
+	batches [][]ember.EventEnvelope
+}
+
+func (s *collectingSink) Publish(_ context.Context, envelopes []ember.EventEnvelope) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.batches = append(s.batches, append([]ember.EventEnvelope(nil), envelopes...))
+	return nil
+}
+
+func (s *collectingSink) all() []ember.EventEnvelope {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []ember.EventEnvelope
+	for _, b := range s.batches {
+		out = append(out, b...)
+	}
+	return out
+}
+
+// setupWAL provisions a uniquely named slot and publication and returns a
+// config plus a cleanup that drops both.
+func setupWAL(t *testing.T, pool *sql.DB, service string) RelayConfig {
+	t.Helper()
+	cfg := DefaultRelayConfig(service)
+	cfg.KeepAliveInterval = 200 * time.Millisecond
+	cfg.AcquireInterval = 100 * time.Millisecond
+	cfg.MaxRetryBackoff = time.Second
+
+	ctx := context.Background()
+	require.NoError(t, EnsurePublication(ctx, postgres.NewDB(pool), cfg.PublicationName))
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(`SELECT pg_drop_replication_slot($1) FROM pg_replication_slots WHERE slot_name = $1`, cfg.SlotName)
+		_, _ = pool.Exec(`DROP PUBLICATION IF EXISTS ` + pgQuoteIdent(cfg.PublicationName))
+	})
+	return cfg
+}
+
+// runRelay starts a relay and blocks until it has acquired cfg.SlotName, so
+// callers never race the relay's own slot creation. Returns a stop func.
+func runRelay(t *testing.T, pool *sql.DB, cfg RelayConfig, sink ember.Sink) func() {
+	t.Helper()
+	r, err := NewRelay(cfg, replConnString(), sink, ember.NopLogger)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+
+	require.True(t, eventually(t, 10*time.Second, func() bool {
+		var active bool
+		err := pool.QueryRow(
+			`SELECT active FROM pg_replication_slots WHERE slot_name = $1`, cfg.SlotName).Scan(&active)
+		return err == nil && active
+	}), "relay never acquired slot %s", cfg.SlotName)
+
+	return func() {
+		cancel()
+		_ = r.Close()
+		<-done
+	}
+}
+
+// eventually polls cond until it holds or the deadline passes.
+func eventually(t *testing.T, d time.Duration, cond func() bool) bool {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return cond()
+}
+
+func TestCommittedEventsReachTheSink(t *testing.T) {
+	pool := connectTestPostgres(t)
+	db := postgres.NewDB(pool)
+	cfg := setupWAL(t, pool, "e2e_commit")
+	repo := NewEventRepository(db, cfg.MessagePrefix)
+
+	sink := &collectingSink{}
+	stop := runRelay(t, pool, cfg, sink)
+	defer stop()
+
+	require.NoError(t, db.WithinTx(context.Background(), func(ctx context.Context) error {
+		return repo.Save(ctx, []ember.EventEnvelope{env("e1"), env("e2")})
+	}))
+
+	require.True(t, eventually(t, 10*time.Second, func() bool { return len(sink.all()) == 2 }),
+		"expected 2 events, got %d", len(sink.all()))
+
+	got := sink.all()
+	require.Equal(t, "e1", got[0].ID)
+	require.Equal(t, "e2", got[1].ID)
+	require.Equal(t, "c-e1", got[0].Metadata[ember.MetadataKey("correlation_id")])
+}
+
+// transactional := true means a rolled back write emits nothing.
+func TestRolledBackEventsNeverReachTheSink(t *testing.T) {
+	pool := connectTestPostgres(t)
+	db := postgres.NewDB(pool)
+	cfg := setupWAL(t, pool, "e2e_rollback")
+	repo := NewEventRepository(db, cfg.MessagePrefix)
+
+	sink := &collectingSink{}
+	stop := runRelay(t, pool, cfg, sink)
+	defer stop()
+
+	wantErr := errors.New("domain failure")
+	err := db.WithinTx(context.Background(), func(ctx context.Context) error {
+		if err := repo.Save(ctx, []ember.EventEnvelope{env("rolled-back")}); err != nil {
+			return err
+		}
+		return wantErr
+	})
+	require.ErrorIs(t, err, wantErr)
+
+	// Commit a marker afterwards so we know the relay was streaming.
+	require.NoError(t, db.WithinTx(context.Background(), func(ctx context.Context) error {
+		return repo.Save(ctx, []ember.EventEnvelope{env("marker")})
+	}))
+
+	require.True(t, eventually(t, 10*time.Second, func() bool { return len(sink.all()) == 1 }))
+	require.Equal(t, "marker", sink.all()[0].ID)
+}
+
+// The regression test for pg-logrepl's ident.XLogPos start position.
+func TestEventsWrittenWhileRelayIsDownAreDelivered(t *testing.T) {
+	pool := connectTestPostgres(t)
+	db := postgres.NewDB(pool)
+	cfg := setupWAL(t, pool, "e2e_resume")
+	repo := NewEventRepository(db, cfg.MessagePrefix)
+
+	first := &collectingSink{}
+	stop := runRelay(t, pool, cfg, first)
+	require.NoError(t, db.WithinTx(context.Background(), func(ctx context.Context) error {
+		return repo.Save(ctx, []ember.EventEnvelope{env("before")})
+	}))
+	require.True(t, eventually(t, 10*time.Second, func() bool { return len(first.all()) == 1 }))
+	stop()
+
+	require.NoError(t, db.WithinTx(context.Background(), func(ctx context.Context) error {
+		return repo.Save(ctx, []ember.EventEnvelope{env("while-down")})
+	}))
+
+	second := &collectingSink{}
+	stop2 := runRelay(t, pool, cfg, second)
+	defer stop2()
+
+	require.True(t, eventually(t, 15*time.Second, func() bool {
+		for _, e := range second.all() {
+			if e.ID == "while-down" {
+				return true
+			}
+		}
+		return false
+	}), "event written while the relay was down must be delivered on restart")
+}
+
+// The regression test for the keepalive cursor advance: unrelated WAL must not
+// pin the slot.
+func TestUnrelatedTrafficAdvancesTheCursor(t *testing.T) {
+	pool := connectTestPostgres(t)
+	db := postgres.NewDB(pool)
+	cfg := setupWAL(t, pool, "e2e_cursor")
+	repo := NewEventRepository(db, cfg.MessagePrefix)
+
+	sink := &collectingSink{}
+	stop := runRelay(t, pool, cfg, sink)
+	defer stop()
+
+	require.NoError(t, db.WithinTx(context.Background(), func(ctx context.Context) error {
+		return repo.Save(ctx, []ember.EventEnvelope{env("e1")})
+	}))
+	require.True(t, eventually(t, 10*time.Second, func() bool { return len(sink.all()) == 1 }))
+
+	lag := func() int64 {
+		var v int64
+		require.NoError(t, pool.QueryRow(
+			`SELECT COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn), 0)::bigint
+			 FROM pg_replication_slots WHERE slot_name = $1`, cfg.SlotName).Scan(&v))
+		return v
+	}
+
+	// Generate WAL this relay does not care about.
+	for i := 0; i < 20; i++ {
+		_, err := pool.Exec(`SELECT pg_logical_emit_message(true, 'someone_else', 'x')`)
+		require.NoError(t, err)
+	}
+
+	require.True(t, eventually(t, 15*time.Second, func() bool { return lag() < 10_000 }),
+		"slot lag stayed at %d; the cursor is not advancing past unrelated WAL", lag())
+}
+
+// Two services on one database keep independent cursors and see only their own
+// events.
+func TestTwoRelaysWithDistinctSlotsStayIndependent(t *testing.T) {
+	pool := connectTestPostgres(t)
+	db := postgres.NewDB(pool)
+
+	cfgA := setupWAL(t, pool, "e2e_svc_a")
+	cfgB := setupWAL(t, pool, "e2e_svc_b")
+
+	sinkA, sinkB := &collectingSink{}, &collectingSink{}
+	stopA := runRelay(t, pool, cfgA, sinkA)
+	defer stopA()
+	stopB := runRelay(t, pool, cfgB, sinkB)
+	defer stopB()
+
+	repoA := NewEventRepository(db, cfgA.MessagePrefix)
+	repoB := NewEventRepository(db, cfgB.MessagePrefix)
+
+	require.NoError(t, db.WithinTx(context.Background(), func(ctx context.Context) error {
+		return repoA.Save(ctx, []ember.EventEnvelope{env("a1")})
+	}))
+	require.NoError(t, db.WithinTx(context.Background(), func(ctx context.Context) error {
+		return repoB.Save(ctx, []ember.EventEnvelope{env("b1")})
+	}))
+
+	require.True(t, eventually(t, 15*time.Second, func() bool {
+		return len(sinkA.all()) == 1 && len(sinkB.all()) == 1
+	}))
+	require.Equal(t, "a1", sinkA.all()[0].ID)
+	require.Equal(t, "b1", sinkB.all()[0].ID)
+}
+
+// A second relay on the same slot stands by rather than double-publishing.
+func TestSecondRelayStandsByOnTheSameSlot(t *testing.T) {
+	pool := connectTestPostgres(t)
+	db := postgres.NewDB(pool)
+	cfg := setupWAL(t, pool, "e2e_standby")
+	repo := NewEventRepository(db, cfg.MessagePrefix)
+
+	leader, standby := &collectingSink{}, &collectingSink{}
+	stopLeader := runRelay(t, pool, cfg, leader)
+	defer stopLeader()
+
+	stopStandby := runRelay(t, pool, cfg, standby)
+	defer stopStandby()
+
+	require.NoError(t, db.WithinTx(context.Background(), func(ctx context.Context) error {
+		return repo.Save(ctx, []ember.EventEnvelope{env("only-once")})
+	}))
+
+	require.True(t, eventually(t, 10*time.Second, func() bool { return len(leader.all()) == 1 }))
+	time.Sleep(time.Second)
+	require.Empty(t, standby.all(), "a standby must not publish")
 }
