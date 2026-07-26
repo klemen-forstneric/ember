@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -64,7 +65,7 @@ func TestEnsurePublicationIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 
 	t.Cleanup(func() {
-		_, _ = pool.Exec(`DROP PUBLICATION IF EXISTS ` + name)
+		_, _ = pool.Exec(`DROP PUBLICATION IF EXISTS ` + pgQuoteIdent(name))
 	})
 
 	require.NoError(t, EnsurePublication(ctx, db, name))
@@ -132,29 +133,44 @@ func setupWAL(t *testing.T, pool *sql.DB, service string) RelayConfig {
 	return cfg
 }
 
-// runRelay starts a relay and blocks until it has acquired cfg.SlotName, so
-// callers never race the relay's own slot creation. Returns a stop func.
-func runRelay(t *testing.T, pool *sql.DB, cfg RelayConfig, sink ember.Sink) func() {
+// startRelay starts a relay and returns a stop func. It does not wait for
+// readiness — callers decide what "ready" means for the role they are starting.
+func startRelay(t *testing.T, cfg RelayConfig, sink ember.Sink, l ember.LoggerCtx) func() {
 	t.Helper()
-	r, err := NewRelay(cfg, replConnString(), sink, ember.NopLogger)
+	r, err := NewRelay(cfg, replConnString(), sink, l)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { r.Run(ctx); close(done) }()
 
-	require.True(t, eventually(t, 10*time.Second, func() bool {
-		var active bool
-		err := pool.QueryRow(
-			`SELECT active FROM pg_replication_slots WHERE slot_name = $1`, cfg.SlotName).Scan(&active)
-		return err == nil && active
-	}), "relay never acquired slot %s", cfg.SlotName)
-
+	var once sync.Once
 	return func() {
-		cancel()
-		_ = r.Close()
-		<-done
+		once.Do(func() {
+			cancel()
+			_ = r.Close()
+			<-done
+		})
 	}
+}
+
+// runRelay starts a relay and blocks until it holds cfg.SlotName, so callers
+// never race the relay's own slot creation. Only valid for a relay expected to
+// win the slot: an already-active slot satisfies this gate no matter which
+// relay holds it.
+func runRelay(t *testing.T, pool *sql.DB, cfg RelayConfig, sink ember.Sink) func() {
+	t.Helper()
+	stop := startRelay(t, cfg, sink, ember.NopLogger)
+	require.True(t, eventually(t, 10*time.Second, func() bool { return slotActive(t, pool, cfg.SlotName) }),
+		"relay never acquired slot %s", cfg.SlotName)
+	return stop
+}
+
+func slotActive(t *testing.T, pool *sql.DB, slot string) bool {
+	t.Helper()
+	var active bool
+	err := pool.QueryRow(`SELECT active FROM pg_replication_slots WHERE slot_name = $1`, slot).Scan(&active)
+	return err == nil && active
 }
 
 // eventually polls cond until it holds or the deadline passes.
@@ -360,25 +376,54 @@ func TestTwoRelaysWithDistinctSlotsStayIndependent(t *testing.T) {
 	require.Equal(t, "b1", sinkB.all()[0].ID)
 }
 
-// A second relay on the same slot stands by rather than double-publishing.
-func TestSecondRelayStandsByOnTheSameSlot(t *testing.T) {
+// A second relay on the same slot stands by rather than double-publishing, and
+// takes over once the leader lets the slot go.
+func TestSecondRelayStandsByAndTakesOver(t *testing.T) {
 	pool := connectTestPostgres(t)
 	db := postgres.NewDB(pool)
 	cfg := setupWAL(t, pool, "e2e_standby")
 	repo := NewEventRepository(db, cfg.MessagePrefix)
 
+	save := func(id string) {
+		t.Helper()
+		require.NoError(t, db.WithinTx(context.Background(), func(ctx context.Context) error {
+			return repo.Save(ctx, []ember.EventEnvelope{env(id)})
+		}))
+	}
+	delivered := func(s *collectingSink, id string) bool {
+		for _, e := range s.all() {
+			if e.ID == id {
+				return true
+			}
+		}
+		return false
+	}
+
 	leader, standby := &collectingSink{}, &collectingSink{}
 	stopLeader := runRelay(t, pool, cfg, leader)
 	defer stopLeader()
 
-	stopStandby := runRelay(t, pool, cfg, standby)
+	// runRelay's gate is useless here: the slot is already active because the
+	// leader holds it, so it would pass even if this relay never dialed. Wait for
+	// the standby's own 55006 log instead.
+	standbyLog := newRecordingLogger()
+	stopStandby := startRelay(t, cfg, standby, standbyLog)
 	defer stopStandby()
 
-	require.NoError(t, db.WithinTx(context.Background(), func(ctx context.Context) error {
-		return repo.Save(ctx, []ember.EventEnvelope{env("only-once")})
-	}))
+	require.True(t, eventually(t, 10*time.Second, func() bool {
+		return slices.Contains(standbyLog.at("debug"), "WAL slot held by another replica; standing by")
+	}), "the standby never dialed and got 55006; errors=%v", standbyLog.at("error"))
 
-	require.True(t, eventually(t, 10*time.Second, func() bool { return len(leader.all()) == 1 }))
+	save("only-once")
+	require.True(t, eventually(t, 10*time.Second, func() bool { return delivered(leader, "only-once") }))
 	time.Sleep(time.Second)
 	require.Empty(t, standby.all(), "a standby must not publish")
+
+	stopLeader()
+
+	save("after-failover")
+	require.True(t, eventually(t, 20*time.Second, func() bool { return delivered(standby, "after-failover") }),
+		"the standby never took over the slot; errors=%v", standbyLog.at("error"))
+	require.False(t, delivered(standby, "only-once"),
+		"takeover must resume from the confirmed position, not replay what the leader published")
 }

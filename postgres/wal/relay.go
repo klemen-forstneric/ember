@@ -1,3 +1,16 @@
+// Package wal delivers ember events through Postgres logical decoding: writes
+// go into the WAL inside the caller's transaction and Relay tails a replication
+// slot, whose exclusivity is the leader election.
+//
+// Operationally the policy is block-never-drop, so an event the Sink keeps
+// rejecting halts the whole service's stream and pins WAL on the primary until
+// it is fixed; watch pg_current_wal_lsn() - confirmed_flush_lsn. The
+// max_slot_wal_keep_size backstop protects the disk by invalidating the slot,
+// which discards everything after its confirmed position — there is no outbox
+// table to replay from.
+//
+// The integration tests here need a live Postgres with wal_level=logical (see
+// testConnString) and skip silently without one.
 package wal
 
 import (
@@ -15,7 +28,10 @@ import (
 	"github.com/klemen-forstneric/ember"
 )
 
-const initialRetryBackoff = 100 * time.Millisecond
+const (
+	initialRetryBackoff = 100 * time.Millisecond
+	drainTimeout        = 5 * time.Second
+)
 
 // errClosed unwinds the stream loop when Close is called.
 var errClosed = errors.New("ember/wal: relay closed")
@@ -46,8 +62,29 @@ func (c *pgReplConn) CreateReplicationSlot(ctx context.Context, slot string) err
 }
 
 func (c *pgReplConn) StartReplication(ctx context.Context, slot string, startLSN pglogrepl.LSN, args []string) error {
-	return pglogrepl.StartReplication(ctx, c.conn, slot, startLSN,
+	err := pglogrepl.StartReplication(ctx, c.conn, slot, startLSN,
 		pglogrepl.StartReplicationOptions{Mode: pglogrepl.LogicalReplication, PluginArgs: args})
+	if err != nil && code(err) != "" {
+		// StartReplication returns on ErrorResponse without consuming the
+		// ReadyForQuery behind it, which desyncs any later command on this
+		// connection — including the CreateReplicationSlot retry.
+		c.drainToReady(ctx)
+	}
+	return err
+}
+
+func (c *pgReplConn) drainToReady(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, drainTimeout)
+	defer cancel()
+	for {
+		m, err := c.conn.ReceiveMessage(ctx)
+		if err != nil {
+			return
+		}
+		if _, ok := m.(*pgproto3.ReadyForQuery); ok {
+			return
+		}
+	}
 }
 
 func (c *pgReplConn) ReceiveMessage(ctx context.Context) (pgproto3.BackendMessage, error) {
@@ -112,7 +149,7 @@ func (r *Relay) Run(ctx context.Context) {
 			return
 		}
 		if err := r.session(ctx); err != nil && !errors.Is(err, errClosed) && ctx.Err() == nil {
-			r.logger.Warn(ctx, "WAL relay session ended", "error", err, "slot", r.cfg.SlotName)
+			r.logSessionFailure(ctx, err)
 		}
 		select {
 		case <-ctx.Done():
@@ -122,6 +159,19 @@ func (r *Relay) Run(ctx context.Context) {
 		case <-time.After(r.acquireInterval()):
 		}
 	}
+}
+
+// Session failures are logged at Error, matching PollingRelay: retrying forever
+// makes a missing REPLICATION grant, wal_level != logical or a dropped
+// publication look exactly like a network blip otherwise.
+func (r *Relay) logSessionFailure(ctx context.Context, err error) {
+	if IsSlotInvalidated(err) {
+		r.logger.Error(ctx, "WAL replication slot is invalidated and unrecoverable; "+
+			"every event after its confirmed position is permanently lost and the relay cannot resume",
+			err, "slot", r.cfg.SlotName)
+		return
+	}
+	r.logger.Error(ctx, "WAL relay session ended", err, "slot", r.cfg.SlotName)
 }
 
 func (r *Relay) Close() error {
@@ -154,17 +204,23 @@ func (r *Relay) session(ctx context.Context) error {
 	}
 	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
 
-	if err := conn.CreateReplicationSlot(ctx, r.cfg.SlotName); err != nil {
-		return err
-	}
-
 	args := []string{
 		`"proto_version" '1'`,
 		fmt.Sprintf(`"publication_names" '%s'`, r.cfg.PublicationName),
 		`"messages" 'true'`,
 	}
 	// Start LSN 0: resume from the slot's confirmed_flush_lsn, not the WAL head.
-	if err := conn.StartReplication(ctx, r.cfg.SlotName, pglogrepl.LSN(0), args); err != nil {
+	err = conn.StartReplication(ctx, r.cfg.SlotName, pglogrepl.LSN(0), args)
+	if IsUndefinedObject(err) {
+		// Creating first instead would make every standby emit a failing
+		// CREATE_REPLICATION_SLOT every AcquireInterval, forever, each one an
+		// ERROR in the server log.
+		if err := conn.CreateReplicationSlot(ctx, r.cfg.SlotName); err != nil {
+			return err
+		}
+		err = conn.StartReplication(ctx, r.cfg.SlotName, pglogrepl.LSN(0), args)
+	}
+	if err != nil {
 		if IsObjectInUse(err) {
 			r.logger.Debug(ctx, "WAL slot held by another replica; standing by", "slot", r.cfg.SlotName)
 			return nil
@@ -240,7 +296,7 @@ func (r *Relay) stream(ctx context.Context, conn replConn) error {
 				continue
 			}
 
-			batch, commitLSN, ready, err := dec.apply(msg)
+			batch, endLSN, ready, err := dec.apply(msg)
 			if err != nil {
 				// Undecodable content will never decode; skipping matches how
 				// kafka.Subscriber treats a poison payload.
@@ -256,8 +312,8 @@ func (r *Relay) stream(ctx context.Context, conn replConn) error {
 					return err
 				}
 			}
-			if commitLSN > logPos {
-				logPos = commitLSN
+			if endLSN > logPos {
+				logPos = endLSN
 			}
 			if err := conn.SendStandbyStatusUpdate(ctx, statusUpdate(logPos)); err != nil {
 				return err

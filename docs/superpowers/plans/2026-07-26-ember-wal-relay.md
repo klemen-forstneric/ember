@@ -1879,9 +1879,9 @@ func TestEventsWrittenWhileRelayIsDownAreDelivered(t *testing.T) {
 	}), "event written while the relay was down must be delivered on restart")
 }
 
-// The regression test for the keepalive cursor advance: unrelated WAL must not
-// pin the slot.
-func TestUnrelatedTrafficAdvancesTheCursor(t *testing.T) {
+// Commits under a foreign prefix still advance the cursor: several services
+// sharing one database must not stall on each other's traffic.
+func TestForeignPrefixCommitsAdvanceTheCursor(t *testing.T) {
 	pool := connectTestPostgres(t)
 	db := postgres.NewDB(pool)
 	cfg := setupWAL(t, pool, "e2e_cursor")
@@ -1946,8 +1946,9 @@ func TestTwoRelaysWithDistinctSlotsStayIndependent(t *testing.T) {
 	require.Equal(t, "b1", sinkB.all()[0].ID)
 }
 
-// A second relay on the same slot stands by rather than double-publishing.
-func TestSecondRelayStandsByOnTheSameSlot(t *testing.T) {
+// A second relay on the same slot stands by rather than double-publishing, and
+// takes over once the leader lets the slot go.
+func TestSecondRelayStandsByAndTakesOver(t *testing.T) {
 	pool := connectTestPostgres(t)
 	db := postgres.NewDB(pool)
 	cfg := setupWAL(t, pool, "e2e_standby")
@@ -1982,10 +1983,10 @@ Update the import block of `integration_test.go` to include `"errors"`, `"string
 
 Ensure Postgres is running (Task 5, Step 2), then run:
 
-Run: `go test ./postgres/wal/ -run 'TestCommitted|TestRolledBack|TestEventsWritten|TestUnrelated|TestTwoRelays|TestSecondRelay' -v -timeout 5m`
+Run: `go test ./postgres/wal/ -run 'TestCommitted|TestRolledBack|TestEventsWritten|TestForeignPrefix|TestTwoRelays|TestSecondRelay' -v -timeout 5m`
 Expected: PASS, 6 tests
 
-If `TestSecondRelayStandsByOnTheSameSlot` is flaky because the standby wins the initial race, increase the leader's head start in the `eventually` that waits for `active`.
+If `TestSecondRelayStandsByAndTakesOver` is flaky because the standby wins the initial race, increase the leader's head start in the `eventually` that waits for `active`.
 
 - [ ] **Step 3: Run everything**
 

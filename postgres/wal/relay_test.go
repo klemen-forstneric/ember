@@ -31,17 +31,49 @@ func (m *mockSink) Publish(ctx context.Context, envelopes []ember.EventEnvelope)
 // blocks until the test's context is cancelled, and records every standby
 // position it was asked to send.
 type fakeConn struct {
-	mu       sync.Mutex
-	queue    []pgproto3.BackendMessage
-	standby  []pglogrepl.LSN
-	startErr error
-	closed   bool
+	mu      sync.Mutex
+	queue   []pgproto3.BackendMessage
+	standby []pglogrepl.LSN
+	// startErr is returned by every StartReplication call, unless startErrs has
+	// entries: those are consumed one per call and take precedence, so a test can
+	// script "fails 42704 once, then succeeds".
+	startErr  error
+	startErrs []error
+	starts    int
+	creates   int
+	createErr error
+	closed    bool
 }
 
-func (c *fakeConn) CreateReplicationSlot(context.Context, string) error { return nil }
+func (c *fakeConn) CreateReplicationSlot(context.Context, string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.creates++
+	return c.createErr
+}
 
 func (c *fakeConn) StartReplication(context.Context, string, pglogrepl.LSN, []string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.starts++
+	if len(c.startErrs) > 0 {
+		err := c.startErrs[0]
+		c.startErrs = c.startErrs[1:]
+		return err
+	}
 	return c.startErr
+}
+
+func (c *fakeConn) createCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.creates
+}
+
+func (c *fakeConn) startCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.starts
 }
 
 func (c *fakeConn) ReceiveMessage(ctx context.Context) (pgproto3.BackendMessage, error) {
@@ -117,6 +149,9 @@ func (l *recordingLogger) Error(_ context.Context, msg string, _ error, _ ...int
 	l.record("error", msg)
 }
 
+// sessionFailureMsg is the Error the run loop logs when a session ends badly.
+const sessionFailureMsg = "WAL relay session ended"
+
 func (l *recordingLogger) at(level string) []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -184,7 +219,7 @@ func (s *RelaySuite) SetupTest() {
 func (s *RelaySuite) event(prefix, id string) *pglogrepl.LogicalDecodingMessage {
 	payload, err := encode(env(id))
 	s.Require().NoError(err)
-	return &pglogrepl.LogicalDecodingMessage{Prefix: prefix, Content: payload}
+	return &pglogrepl.LogicalDecodingMessage{Prefix: prefix, Transactional: true, Content: payload}
 }
 
 // newTestRelay builds a relay whose dialer always returns the suite's fakeConn
@@ -195,13 +230,14 @@ func (s *RelaySuite) newTestRelay(msgs ...pglogrepl.Message) *Relay {
 	return r
 }
 
-// txn scripts a Begin, one event, and a Commit at commitLSN, and queues the
-// matching CopyData frames on the fake connection.
-func (s *RelaySuite) txn(id string, commitLSN pglogrepl.LSN) *Relay {
+// txn scripts a Begin, one event, and a Commit ending at endLSN, and queues the
+// matching CopyData frames on the fake connection. The commit record's own LSN
+// is deliberately lower: the cursor must follow TransactionEndLSN.
+func (s *RelaySuite) txn(id string, endLSN pglogrepl.LSN) *Relay {
 	msgs := []pglogrepl.Message{
 		&pglogrepl.BeginMessage{},
 		s.event(s.cfg.MessagePrefix, id),
-		&pglogrepl.CommitMessage{CommitLSN: commitLSN},
+		commit(endLSN-1, endLSN),
 	}
 	s.conn.queue = []pgproto3.BackendMessage{copyXLog(0), copyXLog(1), copyXLog(2)}
 	return s.newTestRelay(msgs...)
@@ -222,6 +258,13 @@ func (s *RelaySuite) start(r *Relay, ctx context.Context) chan struct{} {
 	done := make(chan struct{})
 	go func() { r.Run(ctx); close(done) }()
 	return done
+}
+
+// assertNoSessionFailure guards the paths that must be handled in-stream
+// rather than by tearing the session down and redialing.
+func (s *RelaySuite) assertNoSessionFailure() {
+	s.NotContains(s.logger.at("error"), sessionFailureMsg)
+	s.Empty(s.logger.at("warn"))
 }
 
 func (s *RelaySuite) awaitStop(done chan struct{}) {
@@ -250,7 +293,7 @@ func (s *RelaySuite) TestForeignPrefixIsNotPublished() {
 	msgs := []pglogrepl.Message{
 		&pglogrepl.BeginMessage{},
 		s.event("other_events", "x1"),
-		&pglogrepl.CommitMessage{CommitLSN: 100},
+		commit(99, 100),
 	}
 	s.conn.queue = []pgproto3.BackendMessage{copyXLog(0), copyXLog(1), copyXLog(2)}
 
@@ -323,7 +366,8 @@ func (s *RelaySuite) TestSlotInUseClosesConnectionAndRetries() {
 	for _, msg := range attempts {
 		s.Equal("WAL slot held by another replica; standing by", msg)
 	}
-	s.Empty(s.logger.at("warn"), "losing the slot race is not a session failure")
+	s.assertNoSessionFailure()
+	s.Zero(s.conn.createCount(), "a standby must not emit a failing CREATE_REPLICATION_SLOT")
 }
 
 // A message pglogrepl.Parse cannot decode must be skipped. Returning would
@@ -332,7 +376,7 @@ func (s *RelaySuite) TestUnparseableMessageIsSkippedAndStreamContinues() {
 	msgs := []pglogrepl.Message{
 		&pglogrepl.BeginMessage{},
 		s.event(s.cfg.MessagePrefix, "e1"),
-		&pglogrepl.CommitMessage{CommitLSN: 100},
+		commit(99, 100),
 	}
 	// Index 9 has no scripted message, so parse fails on the first frame.
 	s.conn.queue = []pgproto3.BackendMessage{copyXLog(9), copyXLog(0), copyXLog(1), copyXLog(2)}
@@ -343,7 +387,7 @@ func (s *RelaySuite) TestUnparseableMessageIsSkippedAndStreamContinues() {
 	s.sink.AssertExpectations(s.T())
 	s.Equal(pglogrepl.LSN(100), s.conn.maxPosition(), "the stream must survive a poison frame")
 	s.Contains(s.logger.at("error"), "Could not parse WAL message; skipping")
-	s.Empty(s.logger.at("warn"), "a poison frame must not end the session")
+	s.assertNoSessionFailure()
 }
 
 // pglogrepl.Parse indexes data[0] with no bounds check, so an empty payload
@@ -381,7 +425,7 @@ func (s *RelaySuite) TestCloseUnwindsPublishRetry() {
 	s.awaitStop(done)
 
 	s.Equal(pglogrepl.LSN(0), s.conn.maxPosition(), "an interrupted retry must not advance")
-	s.Empty(s.logger.at("warn"), "Close is not a session failure")
+	s.assertNoSessionFailure()
 }
 
 func (s *RelaySuite) TestCloseIsIdempotent() {
@@ -395,4 +439,71 @@ func (s *RelaySuite) TestNewRelayValidatesConfig() {
 	cfg.SlotName = ""
 	_, err := NewRelay(cfg, "postgres://localhost/x", s.sink, ember.NopLogger)
 	s.ErrorIs(err, ErrInvalidRelayConfig)
+}
+
+// A session that dies for any other reason is retried forever, so it must be
+// loud: at Warn it is indistinguishable from a missing REPLICATION grant.
+func (s *RelaySuite) TestSessionFailureIsLoggedAtError() {
+	s.conn.startErr = errors.New("connection reset")
+
+	s.runFor(s.newTestRelay(), 100*time.Millisecond)
+
+	s.Contains(s.logger.at("error"), sessionFailureMsg)
+	s.Empty(s.logger.at("warn"))
+}
+
+// An invalidated slot is unrecoverable data loss, not a blip, so it gets its
+// own message rather than the generic session failure.
+func (s *RelaySuite) TestSlotInvalidationIsLoggedDistinctly() {
+	s.conn.startErr = &pgconn.PgError{
+		Code:    "55000",
+		Message: `can no longer get changes from replication slot "svc_events_slot"`,
+	}
+
+	s.runFor(s.newTestRelay(), 100*time.Millisecond)
+
+	msgs := s.logger.at("error")
+	s.NotContains(msgs, sessionFailureMsg)
+	s.Require().NotEmpty(msgs)
+	s.Contains(msgs[0], "invalidated", "the message must name the condition")
+	s.Contains(msgs[0], "permanently lost", "the message must name the consequence")
+}
+
+// The first ever run has no slot: START_REPLICATION reports 42704, the relay
+// creates the slot and starts again, and the stream comes up.
+func (s *RelaySuite) TestMissingSlotIsCreatedThenStreamed() {
+	r := s.txn("e1", 100)
+	s.conn.startErrs = []error{&pgconn.PgError{Code: "42704"}}
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
+
+	s.runFor(r, 200*time.Millisecond)
+
+	s.Equal(1, s.conn.createCount(), "the slot must be created exactly once")
+	s.Equal(2, s.conn.startCount(), "the relay must retry the start after creating")
+	s.sink.AssertExpectations(s.T())
+	s.Equal(pglogrepl.LSN(100), s.conn.maxPosition(), "a first-ever start must end up streaming")
+	s.assertNoSessionFailure()
+}
+
+// The steady state: the slot already exists, so no CREATE is attempted at all.
+func (s *RelaySuite) TestExistingSlotIsNotRecreated() {
+	r := s.txn("e1", 100)
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
+
+	s.runFor(r, 200*time.Millisecond)
+
+	s.Zero(s.conn.createCount())
+	s.Equal(1, s.conn.startCount())
+	s.sink.AssertExpectations(s.T())
+}
+
+// A creation that genuinely fails must end the session rather than stream on a
+// slot that is not there.
+func (s *RelaySuite) TestSlotCreationFailureEndsTheSession() {
+	s.conn.startErrs = []error{&pgconn.PgError{Code: "42704"}}
+	s.conn.createErr = errors.New("permission denied")
+
+	s.runFor(s.newTestRelay(), 100*time.Millisecond)
+
+	s.Contains(s.logger.at("error"), sessionFailureMsg)
 }

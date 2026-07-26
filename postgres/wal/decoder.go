@@ -21,6 +21,9 @@ func (d *decoder) pending() bool { return d.inTx }
 
 // apply feeds one message. ready is true only on commit, including a commit
 // that produced no events for this prefix — the relay still advances past it.
+// endLSN is the position *after* the commit record: Postgres restarts a slot at
+// the first commit whose record LSN is >= confirmed_flush_lsn, so confirming the
+// commit record's own LSN would redeliver that transaction on every restart.
 func (d *decoder) apply(m pglogrepl.Message) ([]ember.EventEnvelope, pglogrepl.LSN, bool, error) {
 	switch v := m.(type) {
 	case *pglogrepl.BeginMessage:
@@ -28,7 +31,10 @@ func (d *decoder) apply(m pglogrepl.Message) ([]ember.EventEnvelope, pglogrepl.L
 		d.buf = nil
 
 	case *pglogrepl.LogicalDecodingMessage:
-		if v.Prefix != d.prefix {
+		// A non-transactional message arrives outside Begin/Commit, so buffering
+		// it would leave it publishable only by a later, unrelated commit — or
+		// skipped entirely by a keepalive advance, since pending() is false.
+		if !v.Transactional || v.Prefix != d.prefix {
 			return nil, 0, false, nil
 		}
 		e, err := decode(v.Content)
@@ -40,7 +46,7 @@ func (d *decoder) apply(m pglogrepl.Message) ([]ember.EventEnvelope, pglogrepl.L
 	case *pglogrepl.CommitMessage:
 		batch := d.buf
 		d.buf, d.inTx = nil, false
-		return batch, v.CommitLSN, true, nil
+		return batch, v.TransactionEndLSN, true, nil
 	}
 	return nil, 0, false, nil
 }

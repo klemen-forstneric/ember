@@ -17,6 +17,9 @@ type EventRepository struct {
 	prefix string
 }
 
+// NewEventRepository requires MarshaledEvent.Data to be valid JSON — the WAL
+// payload embeds it as json.RawMessage — where the table-backed
+// postgres.EventRepository stores opaque bytes.
 func NewEventRepository(db *postgres.DB, prefix string) *EventRepository {
 	return &EventRepository{db: db, prefix: prefix}
 }
