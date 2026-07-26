@@ -87,6 +87,42 @@ func (c *fakeConn) maxPosition() pglogrepl.LSN {
 	return max
 }
 
+// recordingLogger records the message of every log call by level, so tests can
+// tell the standby branch apart from a session failure.
+type recordingLogger struct {
+	mu   sync.Mutex
+	msgs map[string][]string
+}
+
+func newRecordingLogger() *recordingLogger {
+	return &recordingLogger{msgs: make(map[string][]string)}
+}
+
+func (l *recordingLogger) record(level, msg string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.msgs[level] = append(l.msgs[level], msg)
+}
+
+func (l *recordingLogger) Debug(_ context.Context, msg string, _ ...interface{}) {
+	l.record("debug", msg)
+}
+func (l *recordingLogger) Info(_ context.Context, msg string, _ ...interface{}) {
+	l.record("info", msg)
+}
+func (l *recordingLogger) Warn(_ context.Context, msg string, _ ...interface{}) {
+	l.record("warn", msg)
+}
+func (l *recordingLogger) Error(_ context.Context, msg string, _ error, _ ...interface{}) {
+	l.record("error", msg)
+}
+
+func (l *recordingLogger) at(level string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.msgs[level]...)
+}
+
 // scriptedParse stands in for pglogrepl.Parse. Tests address messages by index
 // so no test has to hand-assemble pgoutput wire bytes; the real Parse path is
 // covered by the integration tests in Task 7, where a live server produces the
@@ -124,9 +160,10 @@ func copyKeepalive(serverWALEnd pglogrepl.LSN, replyRequested bool) *pgproto3.Co
 
 type RelaySuite struct {
 	suite.Suite
-	sink *mockSink
-	conn *fakeConn
-	cfg  RelayConfig
+	sink   *mockSink
+	conn   *fakeConn
+	logger *recordingLogger
+	cfg    RelayConfig
 }
 
 func TestRelaySuite(t *testing.T) {
@@ -136,6 +173,7 @@ func TestRelaySuite(t *testing.T) {
 func (s *RelaySuite) SetupTest() {
 	s.sink = &mockSink{}
 	s.conn = &fakeConn{}
+	s.logger = newRecordingLogger()
 	s.cfg = DefaultRelayConfig("svc")
 	s.cfg.KeepAliveInterval = 20 * time.Millisecond
 	s.cfg.AcquireInterval = 10 * time.Millisecond
@@ -152,7 +190,7 @@ func (s *RelaySuite) event(prefix, id string) *pglogrepl.LogicalDecodingMessage 
 // newTestRelay builds a relay whose dialer always returns the suite's fakeConn
 // and whose parse step resolves scripted messages by index.
 func (s *RelaySuite) newTestRelay(msgs ...pglogrepl.Message) *Relay {
-	r := newRelay(s.cfg, func(context.Context) (replConn, error) { return s.conn, nil }, s.sink, ember.NopLogger)
+	r := newRelay(s.cfg, func(context.Context) (replConn, error) { return s.conn, nil }, s.sink, s.logger)
 	r.parse = (&scriptedParse{msgs: msgs}).parse
 	return r
 }
@@ -169,14 +207,29 @@ func (s *RelaySuite) txn(id string, commitLSN pglogrepl.LSN) *Relay {
 	return s.newTestRelay(msgs...)
 }
 
-// runFor runs the relay until d elapses, then closes it and waits.
+// runFor runs the relay until d elapses, then closes it and waits. The context
+// stays live so it is Close, not cancellation, that unwinds the run loop.
 func (s *RelaySuite) runFor(r *Relay, d time.Duration) {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := s.start(r, ctx)
+	time.Sleep(d)
+	s.Require().NoError(r.Close())
+	s.awaitStop(done)
+}
+
+func (s *RelaySuite) start(r *Relay, ctx context.Context) chan struct{} {
 	done := make(chan struct{})
 	go func() { r.Run(ctx); close(done) }()
-	time.Sleep(d)
-	cancel()
-	<-done
+	return done
+}
+
+func (s *RelaySuite) awaitStop(done chan struct{}) {
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		s.FailNow("relay did not stop after Close")
+	}
 }
 
 func (s *RelaySuite) TestPublishesCommittedTransactionAndAdvances() {
@@ -215,6 +268,9 @@ func (s *RelaySuite) TestFailedPublishDoesNotAdvance() {
 	s.runFor(r, 200*time.Millisecond)
 
 	s.Greater(len(s.sink.Calls), 1, "publish must be retried")
+	// 200ms of retries capped at a 20ms backoff is ~10 attempts; an uncapped
+	// 100ms initial backoff would manage 2.
+	s.Greater(len(s.sink.Calls), 4, "backoff must not exceed MaxRetryBackoff")
 	s.Equal(pglogrepl.LSN(0), s.conn.maxPosition(), "cursor must not advance past a failed publish")
 }
 
@@ -254,13 +310,78 @@ func (s *RelaySuite) TestKeepaliveDoesNotAdvanceMidTransaction() {
 	s.Equal(pglogrepl.LSN(0), s.conn.maxPosition())
 }
 
-// Another replica holds the slot: stand by, and do not hold a wal_sender.
+// Another replica holds the slot: stand by, do not hold a wal_sender, and do
+// not report losing the race as a session failure.
 func (s *RelaySuite) TestSlotInUseClosesConnectionAndRetries() {
 	s.conn.startErr = &pgconn.PgError{Code: "55006"}
 
 	s.runFor(s.newTestRelay(), 100*time.Millisecond)
 
 	s.True(s.conn.closed, "a standby must close its connection before sleeping")
+	attempts := s.logger.at("debug")
+	s.Greater(len(attempts), 1, "a standby must keep re-attempting the slot")
+	for _, msg := range attempts {
+		s.Equal("WAL slot held by another replica; standing by", msg)
+	}
+	s.Empty(s.logger.at("warn"), "losing the slot race is not a session failure")
+}
+
+// A message pglogrepl.Parse cannot decode must be skipped. Returning would
+// redial and resume from the same bytes forever, pinning WAL.
+func (s *RelaySuite) TestUnparseableMessageIsSkippedAndStreamContinues() {
+	msgs := []pglogrepl.Message{
+		&pglogrepl.BeginMessage{},
+		s.event(s.cfg.MessagePrefix, "e1"),
+		&pglogrepl.CommitMessage{CommitLSN: 100},
+	}
+	// Index 9 has no scripted message, so parse fails on the first frame.
+	s.conn.queue = []pgproto3.BackendMessage{copyXLog(9), copyXLog(0), copyXLog(1), copyXLog(2)}
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
+
+	s.runFor(s.newTestRelay(msgs...), 200*time.Millisecond)
+
+	s.sink.AssertExpectations(s.T())
+	s.Equal(pglogrepl.LSN(100), s.conn.maxPosition(), "the stream must survive a poison frame")
+	s.Contains(s.logger.at("error"), "Could not parse WAL message; skipping")
+	s.Empty(s.logger.at("warn"), "a poison frame must not end the session")
+}
+
+// pglogrepl.Parse indexes data[0] with no bounds check, so an empty payload
+// must never reach it.
+func (s *RelaySuite) TestEmptyWALDataIsSkipped() {
+	header := make([]byte, 1+24)
+	header[0] = pglogrepl.XLogDataByteID
+	s.conn.queue = []pgproto3.BackendMessage{
+		&pgproto3.CopyData{Data: header},
+		copyKeepalive(500, true),
+	}
+
+	r := s.newTestRelay()
+	r.parse = pglogrepl.Parse
+	s.runFor(r, 200*time.Millisecond)
+
+	s.Equal(pglogrepl.LSN(500), s.conn.maxPosition())
+}
+
+// Close must unwind a blocked publish retry rather than wait for it to land.
+func (s *RelaySuite) TestCloseUnwindsPublishRetry() {
+	r := s.txn("e1", 100)
+	retrying := make(chan struct{})
+	var once sync.Once
+	s.sink.On("Publish", mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) { once.Do(func() { close(retrying) }) }).
+		Return(errors.New("broker down"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := s.start(r, ctx)
+
+	<-retrying
+	s.Require().NoError(r.Close())
+	s.awaitStop(done)
+
+	s.Equal(pglogrepl.LSN(0), s.conn.maxPosition(), "an interrupted retry must not advance")
+	s.Empty(s.logger.at("warn"), "Close is not a session failure")
 }
 
 func (s *RelaySuite) TestCloseIsIdempotent() {

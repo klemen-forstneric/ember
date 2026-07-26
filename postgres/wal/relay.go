@@ -197,7 +197,7 @@ func (r *Relay) stream(ctx context.Context, conn replConn) error {
 		raw, err := conn.ReceiveMessage(recvCtx)
 		cancel()
 		if err != nil {
-			if pgconn.Timeout(err) && ctx.Err() == nil {
+			if (pgconn.Timeout(err) || errors.Is(err, context.DeadlineExceeded)) && ctx.Err() == nil {
 				continue
 			}
 			return err
@@ -228,9 +228,16 @@ func (r *Relay) stream(ctx context.Context, conn replConn) error {
 			if err != nil {
 				return err
 			}
+			if len(xld.WALData) == 0 {
+				continue
+			}
 			msg, err := r.parse(xld.WALData)
 			if err != nil {
-				return err
+				// Returning would redial and resume from the same bytes forever,
+				// pinning WAL. Parse rejects any message type it does not know.
+				r.logger.Error(ctx, "Could not parse WAL message; skipping", err,
+					"wal_start", xld.WALStart.String())
+				continue
 			}
 
 			batch, commitLSN, ready, err := dec.apply(msg)
@@ -264,7 +271,7 @@ func (r *Relay) stream(ctx context.Context, conn replConn) error {
 // the event is a committed domain fact, so blocking is preferable to loss.
 // Recovery is a deploy, surfaced by slot lag.
 func (r *Relay) publish(ctx context.Context, conn replConn, batch []ember.EventEnvelope, logPos pglogrepl.LSN) error {
-	backoff := initialRetryBackoff
+	backoff := min(initialRetryBackoff, r.cfg.MaxRetryBackoff)
 	for attempt := 1; ; attempt++ {
 		err := r.sink.Publish(ctx, batch)
 		if err == nil {
