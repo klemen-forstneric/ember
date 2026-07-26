@@ -21,7 +21,8 @@ import (
 // server with:
 //
 //	docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17 \
-//	  -c wal_level=logical -c max_replication_slots=10 -c max_wal_senders=10
+//	  -c wal_level=logical -c max_replication_slots=10 -c max_wal_senders=10 \
+//	  -c wal_sender_timeout=5s
 func testConnString() string {
 	if v := os.Getenv("EMBER_TEST_POSTGRES"); v != "" {
 		return v
@@ -254,9 +255,9 @@ func TestEventsWrittenWhileRelayIsDownAreDelivered(t *testing.T) {
 	}), "event written while the relay was down must be delivered on restart")
 }
 
-// The regression test for the keepalive cursor advance: unrelated WAL must not
-// pin the slot.
-func TestUnrelatedTrafficAdvancesTheCursor(t *testing.T) {
+// Commits under a foreign prefix still advance the cursor: several services
+// sharing one database must not stall on each other's traffic.
+func TestForeignPrefixCommitsAdvanceTheCursor(t *testing.T) {
 	pool := connectTestPostgres(t)
 	db := postgres.NewDB(pool)
 	cfg := setupWAL(t, pool, "e2e_cursor")
@@ -279,14 +280,52 @@ func TestUnrelatedTrafficAdvancesTheCursor(t *testing.T) {
 		return v
 	}
 
-	// Generate WAL this relay does not care about.
+	// Generate committed messages under a prefix this relay does not care about.
 	for i := 0; i < 20; i++ {
 		_, err := pool.Exec(`SELECT pg_logical_emit_message(true, 'someone_else', 'x')`)
 		require.NoError(t, err)
 	}
 
 	require.True(t, eventually(t, 15*time.Second, func() bool { return lag() < 10_000 }),
-		"slot lag stayed at %d; the cursor is not advancing past unrelated WAL", lag())
+		"slot lag stayed at %d; the cursor is not advancing past foreign-prefix commits", lag())
+}
+
+// The regression test for the keepalive cursor advance: WAL that never
+// reaches the decoder as a transaction (a plain write to a table outside the
+// publication, which pgoutput suppresses as an empty commit) must still be
+// passed by the slot, driven only by the server's keepalive ServerWALEnd.
+func TestServerKeepaliveAdvancesTheCursor(t *testing.T) {
+	pool := connectTestPostgres(t)
+	cfg := setupWAL(t, pool, "e2e_keepalive")
+
+	_, err := pool.Exec(`CREATE TABLE e2e_keepalive_scratch (id serial primary key, payload text)`)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(`DROP TABLE IF EXISTS e2e_keepalive_scratch`) })
+
+	sink := &collectingSink{}
+	stop := runRelay(t, pool, cfg, sink)
+	defer stop()
+
+	lag := func() int64 {
+		var v int64
+		require.NoError(t, pool.QueryRow(
+			`SELECT COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn), 0)::bigint
+			 FROM pg_replication_slots WHERE slot_name = $1`, cfg.SlotName).Scan(&v))
+		return v
+	}
+
+	// Generate enough WAL, on a table the publication does not include, that a
+	// commit-driven advance could not plausibly explain a lag drop: pgoutput
+	// emits nothing for these transactions at all, so only a keepalive can move
+	// the cursor past them.
+	for i := 0; i < 500; i++ {
+		_, err := pool.Exec(`INSERT INTO e2e_keepalive_scratch(payload) VALUES ($1)`, strings.Repeat("x", 2000))
+		require.NoError(t, err)
+	}
+	require.Greater(t, lag(), int64(10_000), "test setup did not generate enough WAL to be meaningful")
+
+	require.True(t, eventually(t, 15*time.Second, func() bool { return lag() < 10_000 }),
+		"slot lag stayed at %d; the server keepalive is not advancing the cursor", lag())
 }
 
 // Two services on one database keep independent cursors and see only their own
