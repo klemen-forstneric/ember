@@ -88,46 +88,35 @@ func NewPollingRelay(r PollingRelayRepository, s Sink, l Locker, log LoggerCtx, 
 	}, nil
 }
 
-// groupByEntity partitions events into per-entity runs, preserving each
-// entity's internal order and ordering groups by first appearance.
-func groupByEntity(events []EventEnvelope) [][]EventEnvelope {
-	index := make(map[string]int, len(events))
-	groups := make([][]EventEnvelope, 0, len(events))
-	for _, e := range events {
-		i, ok := index[e.EntityID]
-		if !ok {
-			index[e.EntityID] = len(groups)
-			groups = append(groups, []EventEnvelope{e})
-			continue
-		}
-		groups[i] = append(groups[i], e)
-	}
-	return groups
-}
-
 func (r *PollingRelay) publish(ctx context.Context) (int, error) {
 	events, err := r.repository.ListUnpublished(ctx, r.cfg.BatchSize)
 	if err != nil {
 		return 0, err
 	}
 
-	ids := make([]string, 0, len(events))
+	groups := make(map[string][]EventEnvelope)
+	for _, e := range events {
+		groups[e.EntityID] = append(groups[e.EntityID], e)
+	}
 
-	for _, g := range groupByEntity(events) {
-		if err := r.sink.Publish(ctx, g); err != nil {
+	ids := make([]string, 0, len(events))
+	for id, es := range groups {
+		if err := r.sink.Publish(ctx, es); err != nil {
 			r.logger.Warn(ctx, "Failed to publish events, will retry",
-				"error", err, "entity_id", g[0].EntityID, "events", len(g))
+				"error", err, "entity_id", id, "num_events", len(es))
+
 			continue
 		}
 
-		for _, e := range g {
-			ids = append(ids, e.ID)
-
+		for _, e := range es {
 			elapsed := time.Since(e.Timestamp)
-			r.logger.Info(ctx, "Published event", "eventId", e.ID, "type", e.Event.Type,
+
+			r.logger.Info(ctx, "Published event", "event_id", e.ID, "type", e.Event.Type,
 				"entity_id", e.EntityID, "payload", json.RawMessage(e.Event.Data),
 				"metadata", e.Metadata, "timestamp", e.Timestamp,
 				"elapsed_ms", elapsed.Milliseconds())
+
+			ids = append(ids, e.ID)
 		}
 	}
 
