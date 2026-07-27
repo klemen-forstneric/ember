@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/suite"
+	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/klemen-forstneric/ember"
 )
@@ -62,6 +63,19 @@ func (s *EventRepositorySuite) TestSaveThenListUnpublishedOrdersBySeq() {
 	s.Equal("corr-e1", got[0].Metadata[ember.MetadataKey("correlation_id")])
 	// Timestamp reconstructs from created_at (ms precision).
 	s.True(got[0].Timestamp.Equal(base.Add(1 * time.Millisecond)))
+}
+
+// TestSaveStoresDataAsADocument pins the reason data is not stored as bytes: an
+// operator reading the outbox sees the payload, not base64.
+func (s *EventRepositorySuite) TestSaveStoresDataAsADocument() {
+	ctx := context.Background()
+	s.Require().NoError(s.repo.Save(ctx, []ember.EventEnvelope{
+		env("e1", "A", time.Unix(1_700_000_000, 0).UTC()),
+	}))
+
+	var raw bson.M
+	s.Require().NoError(s.repo.collection.FindOne(ctx, bson.D{{Key: "_id", Value: "e1"}}).Decode(&raw))
+	s.Equal(bson.D{{Key: "k", Value: "v"}}, raw["data"], "want a nested document, not binary")
 }
 
 func (s *EventRepositorySuite) TestListUnpublishedRespectsLimit() {

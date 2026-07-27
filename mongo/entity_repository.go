@@ -20,7 +20,7 @@ func NewEntityRepository(c *mongo.Collection) *EntityRepository {
 }
 
 func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) error {
-	var body bson.D
+	var body bson.Raw
 	if err := bson.UnmarshalExtJSON(m.Data, false, &body); err != nil {
 		return err
 	}

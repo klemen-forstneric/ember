@@ -22,11 +22,13 @@ func NewEventRepository(c *mongo.Collection) *EventRepository {
 	return &EventRepository{collection: c}
 }
 
+// Data is a nested document, not bytes, so the payload is readable and
+// queryable in the shell. MarshaledEvent.Data must be a JSON object.
 type entry struct {
 	ID          string         `bson:"_id"`
 	EntityID    string         `bson:"entity_id"`
 	Type        string         `bson:"type"`
-	Data        []byte         `bson:"data"`
+	Data        bson.Raw       `bson:"data"`
 	Metadata    ember.Metadata `bson:"metadata"`
 	Seq         int64          `bson:"seq"`
 	CreatedAt   time.Time      `bson:"created_at"`
@@ -42,11 +44,16 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 
 	ds := make([]entry, 0, len(envelopes))
 	for _, e := range envelopes {
+		var data bson.Raw
+		if err := bson.UnmarshalExtJSON(e.Event.Data, false, &data); err != nil {
+			return err
+		}
+
 		ds = append(ds, entry{
 			ID:        e.ID,
 			EntityID:  e.EntityID,
 			Type:      e.Event.Type,
-			Data:      e.Event.Data,
+			Data:      data,
 			Metadata:  e.Metadata,
 			Seq:       e.Timestamp.UnixNano(),
 			CreatedAt: e.Timestamp,
@@ -74,12 +81,18 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]emb
 		if err := cur.Decode(&d); err != nil {
 			return nil, err
 		}
+
+		data, err := bson.MarshalExtJSON(d.Data, false, false)
+		if err != nil {
+			return nil, err
+		}
+
 		out = append(out, ember.EventEnvelope{
 			ID:       d.ID,
 			EntityID: d.EntityID,
 			Event: &ember.MarshaledEvent{
 				Type: d.Type,
-				Data: d.Data,
+				Data: data,
 			},
 			Metadata:  d.Metadata,
 			Timestamp: d.CreatedAt,
