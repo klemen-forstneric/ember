@@ -1,4 +1,4 @@
-package embermem
+package embertest
 
 import (
 	"encoding/json"

@@ -31,7 +31,7 @@ func (s *EntitySaverSuite) SetupTest() {
 	s.eventMarsh = &mockEventMarshaler{}
 	s.sink = &mockSink{}
 	s.tx = &mockTransactor{}
-	publisher := NewPublisher(stubIDer{id: "evt-1"}, NoopMetadataGetter{}, s.eventMarsh, AtLeastOnce(s.eventRepo))
+	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, AtLeastOnce(s.eventRepo))
 	s.saver = NewEntitySaver(publisher, s.tx, nil, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
 }
 
@@ -141,7 +141,7 @@ func (s *EntitySaverSuite) TestSaveCommitErrorLeavesEntityUntouched() {
 func (s *EntitySaverSuite) TestSaveTwoTypesOneTx() {
 	repo2 := &mockEntityRepository{}
 	marsh2 := &mockEntityMarshaler[*fakeEntity2]{}
-	publisher := NewPublisher(stubIDer{id: "evt-1"}, NoopMetadataGetter{}, s.eventMarsh, AtLeastOnce(s.eventRepo))
+	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, AtLeastOnce(s.eventRepo))
 	saver := NewEntitySaver(publisher, s.tx, nil,
 		Bind[*fakeEntity](s.entityRepo, s.entityMarsh),
 		Bind[*fakeEntity2](repo2, marsh2),
@@ -174,7 +174,7 @@ func (s *EntitySaverSuite) TestSaveTwoTypesOneTx() {
 // suite's sink and a fresh recordingTransactor. l may be nil (defaults to NopLogger).
 func (s *EntitySaverSuite) bestEffortSaver(l LoggerCtx) (*EntitySaver, *recordingTransactor) {
 	tx := &recordingTransactor{}
-	publisher := NewPublisher(stubIDer{id: "evt-1"}, NoopMetadataGetter{}, s.eventMarsh, BestEffort(s.sink))
+	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, BestEffort(s.sink))
 	return NewEntitySaver(publisher, tx, l, Bind[*fakeEntity](s.entityRepo, s.entityMarsh)), tx
 }
 
@@ -201,7 +201,7 @@ func (s *EntitySaverSuite) TestBestEffortDeliversAfterCommit() {
 }
 
 func (s *EntitySaverSuite) TestBestEffortCommitFailureDoesNotDeliver() {
-	publisher := NewPublisher(stubIDer{id: "evt-1"}, NoopMetadataGetter{}, s.eventMarsh, BestEffort(s.sink))
+	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, BestEffort(s.sink))
 	saver := NewEntitySaver(publisher, s.tx, nil, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
 
 	e := newFakeEntity("1")
@@ -227,7 +227,7 @@ func (s *EntitySaverSuite) TestBestEffortCommitFailureDoesNotDeliver() {
 func (s *EntitySaverSuite) TestBestEffortDeliveryIgnoresPostCommitCancellation() {
 	ctx, cancel := context.WithCancel(context.Background())
 	tx := &cancelAfterCommitTransactor{cancel: cancel}
-	publisher := NewPublisher(stubIDer{id: "evt-1"}, NoopMetadataGetter{}, s.eventMarsh, BestEffort(s.sink))
+	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, BestEffort(s.sink))
 	saver := NewEntitySaver(publisher, tx, nil, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
 
 	e := newFakeEntity("1")
@@ -317,7 +317,7 @@ func (s *EntitySaverSuite) TestBestEffortSilentWhenEmberOwnsTx() {
 func (s *EntitySaverSuite) TestSaveJoinedTxAtLeastOnceDoesNotWarn() {
 	s.tx.inTx = true
 	logger := &mockLogger{}
-	publisher := NewPublisher(stubIDer{id: "evt-1"}, NoopMetadataGetter{}, s.eventMarsh, AtLeastOnce(s.eventRepo))
+	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, AtLeastOnce(s.eventRepo))
 	saver := NewEntitySaver(publisher, s.tx, logger, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
 
 	e := newFakeEntity("1")

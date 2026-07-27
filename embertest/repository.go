@@ -1,7 +1,4 @@
-// Package embermem provides an in-memory ember.EntityRepository for use as a
-// test double. It has filter, sort, and optimistic-version parity with the real
-// backends so unit tests exercise the same semantics. It is NOT for production.
-package embermem
+package embertest
 
 import (
 	"bytes"

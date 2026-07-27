@@ -28,7 +28,7 @@ func (s *EntityStoreSuite) SetupTest() {
 	s.eventRepo = &mockEventRepository{}
 	s.eventMarsh = &mockEventMarshaler{}
 	s.tx = &mockTransactor{}
-	publisher := NewPublisher(stubIDer{id: "evt-1"}, NoopMetadataGetter{}, s.eventMarsh, AtLeastOnce(s.eventRepo))
+	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, AtLeastOnce(s.eventRepo))
 	s.store = NewEntityStore[*fakeEntity](s.repo, s.marshaler, publisher, s.tx, nil)
 }
 

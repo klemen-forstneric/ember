@@ -43,10 +43,10 @@ type MetadataGetter interface {
 	Get(ctx context.Context) (Metadata, error)
 }
 
-// NoopMetadataGetter
-type NoopMetadataGetter struct {
+// NopMetadataGetter
+type NopMetadataGetter struct {
 }
 
-func (NoopMetadataGetter) Get(ctx context.Context) (Metadata, error) {
+func (NopMetadataGetter) Get(ctx context.Context) (Metadata, error) {
 	return make(Metadata), nil
 }
