@@ -53,3 +53,72 @@ func (s *EnsureOutboxSuite) TestIdempotent() {
 	s.Require().NoError(EnsureOutbox(ctx, s.col))
 	s.Require().NoError(EnsureOutbox(ctx, s.col), "second call must be a no-op, not an error")
 }
+
+type EnsureEntitiesSuite struct {
+	suite.Suite
+	col *mongo.Collection
+}
+
+func TestEnsureEntitiesSuite(t *testing.T) {
+	suite.Run(t, new(EnsureEntitiesSuite))
+}
+
+func (s *EnsureEntitiesSuite) SetupTest() {
+	s.col = connectTestMongo(s.T())
+}
+
+func legacyDoc(id, typ string, version uint64, n string) bson.D {
+	return bson.D{
+		{Key: "_id", Value: id},
+		{Key: "type", Value: typ},
+		{Key: "version", Value: version},
+		{Key: "data", Value: bson.D{{Key: "n", Value: n}}},
+	}
+}
+
+// Documents written before entity_id existed carry identity on _id; after the
+// backfill they must read and write through the (type, entity_id) key.
+func (s *EnsureEntitiesSuite) TestBackfillsLegacyDocuments() {
+	ctx := context.Background()
+	_, err := s.col.InsertMany(ctx, []any{
+		legacyDoc("old1", "order", 3, "a"),
+		legacyDoc("old2", "offer", 1, "b"),
+	})
+	s.Require().NoError(err)
+
+	s.Require().NoError(EnsureEntities(ctx, s.col))
+	s.Require().NoError(EnsureEntities(ctx, s.col), "second call must be a no-op, not an error")
+
+	repo, err := NewEntityRepository(ctx, s.col)
+	s.Require().NoError(err)
+
+	got, err := repo.Get(ctx, "order", "old1")
+	s.Require().NoError(err)
+	s.Equal(uint64(3), got.Version.Value())
+	s.JSONEq(`{"n":"a"}`, string(got.Data))
+
+	// A migrated document updates in place rather than gaining an ObjectId twin.
+	s.Require().NoError(repo.Save(ctx, marshaled("order", "old1", 3, `{"n":"c"}`)))
+	n, err := s.col.CountDocuments(ctx, bson.D{{Key: "type", Value: "order"}})
+	s.Require().NoError(err)
+	s.Equal(int64(1), n)
+}
+
+func (s *EnsureEntitiesSuite) TestCreatesUniqueCompoundIndex() {
+	ctx := context.Background()
+	s.Require().NoError(EnsureEntities(ctx, s.col))
+
+	cur, err := s.col.Indexes().List(ctx)
+	s.Require().NoError(err)
+	var specs []bson.M
+	s.Require().NoError(cur.All(ctx, &specs))
+
+	var found bool
+	for _, spec := range specs {
+		if spec["unique"] == true {
+			found = true
+			s.Equal(bson.D{{Key: "type", Value: int32(1)}, {Key: "entity_id", Value: int32(1)}}, spec["key"])
+		}
+	}
+	s.True(found, "expected a unique (type, entity_id) index")
+}

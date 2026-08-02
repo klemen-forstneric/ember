@@ -10,13 +10,39 @@ import (
 	"github.com/klemen-forstneric/ember"
 )
 
-// EntityRepository
+// EntityRepository stores entities keyed by (type, entity_id). _id is a
+// meaningless surrogate; EnsureEntities builds the index that enforces the key.
 type EntityRepository struct {
 	collection *mongo.Collection
 }
 
-func NewEntityRepository(c *mongo.Collection) *EntityRepository {
-	return &EntityRepository{collection: c}
+// NewEntityRepository provisions the key before returning, so a repository
+// cannot exist without the index its optimistic lock rides on.
+func NewEntityRepository(ctx context.Context, c *mongo.Collection) (*EntityRepository, error) {
+	if err := EnsureEntities(ctx, c); err != nil {
+		return nil, err
+	}
+	return &EntityRepository{collection: c}, nil
+}
+
+type document struct {
+	EntityID string   `bson:"entity_id"`
+	Type     string   `bson:"type"`
+	Version  uint64   `bson:"version"`
+	Data     bson.Raw `bson:"data"`
+}
+
+func (d document) entity() (*ember.MarshaledEntity, error) {
+	data, err := bson.MarshalExtJSON(d.Data, false, false)
+	if err != nil {
+		return nil, err
+	}
+	return &ember.MarshaledEntity{
+		ID:      d.EntityID,
+		Type:    d.Type,
+		Version: ember.NewVersion(d.Version),
+		Data:    data,
+	}, nil
 }
 
 func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) error {
@@ -25,15 +51,18 @@ func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) e
 		return err
 	}
 
+	// _id is absent, so an upsert that inserts gets a freshly generated ObjectId.
 	filter := bson.D{
-		{Key: "_id", Value: m.ID},
+		{Key: "type", Value: m.Type},
+		{Key: "entity_id", Value: m.ID},
 		{Key: "version", Value: m.Version.Initial()},
 	}
 
-	replacement := bson.D{
-		{Key: "type", Value: m.Type},
-		{Key: "version", Value: m.Version.Value()},
-		{Key: "data", Value: body},
+	replacement := document{
+		EntityID: m.ID,
+		Type:     m.Type,
+		Version:  m.Version.Value(),
+		Data:     body,
 	}
 
 	_, err := r.collection.ReplaceOne(
@@ -43,6 +72,8 @@ func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) e
 		options.Replace().SetUpsert(true),
 	)
 
+	// Missing on version falls through to an insert, which the unique
+	// (type, entity_id) index rejects: the row exists at another version.
 	if mongo.IsDuplicateKeyError(err) {
 		return ember.ErrVersionConflict
 	}
@@ -52,36 +83,18 @@ func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) e
 
 func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.MarshaledEntity, error) {
 	filter := bson.D{
-		{Key: "_id", Value: id},
 		{Key: "type", Value: typ},
+		{Key: "entity_id", Value: id},
 	}
 
-	res := r.collection.FindOne(ctx, filter)
-
-	var e struct {
-		ID      string   `bson:"_id"`
-		Type    string   `bson:"type"`
-		Version uint64   `bson:"version"`
-		Data    bson.Raw `bson:"data"`
-	}
-
-	if err := res.Decode(&e); err == mongo.ErrNoDocuments {
+	var d document
+	if err := r.collection.FindOne(ctx, filter).Decode(&d); err == mongo.ErrNoDocuments {
 		return nil, ember.ErrEntityNotFound
 	} else if err != nil {
 		return nil, err
 	}
 
-	data, err := bson.MarshalExtJSON(e.Data, false, false)
-	if err != nil {
-		return nil, err
-	}
-
-	return &ember.MarshaledEntity{
-		ID:      e.ID,
-		Type:    e.Type,
-		Version: ember.NewVersion(e.Version),
-		Data:    data,
-	}, nil
+	return d.entity()
 }
 
 func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter, s ember.Sort) ([]*ember.MarshaledEntity, error) {
@@ -115,27 +128,17 @@ func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter,
 
 	var out []*ember.MarshaledEntity
 	for cur.Next(ctx) {
-		var e struct {
-			ID      string   `bson:"_id"`
-			Type    string   `bson:"type"`
-			Version uint64   `bson:"version"`
-			Data    bson.Raw `bson:"data"`
-		}
-		if err := cur.Decode(&e); err != nil {
+		var d document
+		if err := cur.Decode(&d); err != nil {
 			return nil, err
 		}
 
-		data, err := bson.MarshalExtJSON(e.Data, false, false)
+		m, err := d.entity()
 		if err != nil {
 			return nil, err
 		}
 
-		out = append(out, &ember.MarshaledEntity{
-			ID:      e.ID,
-			Type:    e.Type,
-			Version: ember.NewVersion(e.Version),
-			Data:    data,
-		})
+		out = append(out, m)
 	}
 	if err := cur.Err(); err != nil {
 		return nil, err

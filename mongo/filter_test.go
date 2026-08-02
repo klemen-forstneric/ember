@@ -20,7 +20,7 @@ func TestBuildFilter(t *testing.T) {
 		{"nil matches all", nil, bson.D{}},
 		{"eq data path", ember.Eq("status", "open"), bson.D{{Key: "data.status", Value: bson.D{{Key: "$eq", Value: "open"}}}}},
 		{"nested data path", ember.Eq("address.city", "NYC"), bson.D{{Key: "data.address.city", Value: bson.D{{Key: "$eq", Value: "NYC"}}}}},
-		{"reserved id", ember.Eq("id", "x"), bson.D{{Key: "_id", Value: bson.D{{Key: "$eq", Value: "x"}}}}},
+		{"reserved id", ember.Eq("id", "x"), bson.D{{Key: "entity_id", Value: bson.D{{Key: "$eq", Value: "x"}}}}},
 		{"reserved version", ember.Gt("version", 5), bson.D{{Key: "version", Value: bson.D{{Key: "$gt", Value: 5}}}}},
 		{"gt", ember.Gt("total", 100), bson.D{{Key: "data.total", Value: bson.D{{Key: "$gt", Value: 100}}}}},
 		{"in", ember.In("region", "EU", "UK"), bson.D{{Key: "data.region", Value: bson.D{{Key: "$in", Value: bson.A{"EU", "UK"}}}}}},

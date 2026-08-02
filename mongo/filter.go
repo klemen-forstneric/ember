@@ -93,7 +93,7 @@ func composite(op string, fs []ember.Filter) (bson.D, error) {
 func field(path string) string {
 	switch path {
 	case "id":
-		return "_id"
+		return "entity_id" // not _id, which is a surrogate
 	case "type", "version":
 		return path
 	default:

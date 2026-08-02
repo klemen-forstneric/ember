@@ -12,7 +12,8 @@ import (
 // psql renders `?` placeholders as Postgres `$N`.
 var psql = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
-// EntityRepository
+// EntityRepository stores entities keyed by (id, type); the table needs a unique
+// constraint on that pair for Save's upsert to resolve.
 type EntityRepository struct {
 	db    *DB
 	table string
@@ -28,7 +29,7 @@ func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) e
 		Columns("id", "type", "version", "data").
 		Values(m.ID, m.Type, m.Version.Value(), m.Data).
 		Suffix(
-			"ON CONFLICT (id) DO UPDATE SET version = ?, data = ? WHERE "+r.table+".version = ?",
+			"ON CONFLICT (id, type) DO UPDATE SET version = ?, data = ? WHERE "+r.table+".version = ?",
 			m.Version.Value(), m.Data, m.Version.Initial(),
 		).
 		ToSql()

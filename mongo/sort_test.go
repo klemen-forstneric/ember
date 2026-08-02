@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -14,12 +15,22 @@ import (
 	"github.com/klemen-forstneric/ember"
 )
 
+// testMongoURI is the DSN for integration tests. A replica set that advertises
+// a hostname the test process cannot resolve (docker compose) needs
+// EMBER_TEST_MONGO=mongodb://localhost:27017/?directConnection=true
+func testMongoURI() string {
+	if v := os.Getenv("EMBER_TEST_MONGO"); v != "" {
+		return v
+	}
+	return "mongodb://localhost:27017"
+}
+
 // connectTestMongo dials a local Mongo instance and returns a collection
 // scoped to this test run. It skips the test when no Mongo is reachable.
 func connectTestMongo(t *testing.T) *mongo.Collection {
 	t.Helper()
 	ctx := context.Background()
-	client, err := mongo.Connect(options.Client().ApplyURI("mongodb://localhost:27017"))
+	client, err := mongo.Connect(options.Client().ApplyURI(testMongoURI()))
 	if err != nil {
 		t.Skipf("mongo unavailable: %v", err)
 	}
@@ -35,7 +46,7 @@ func connectTestMongo(t *testing.T) *mongo.Collection {
 
 func makeEntity(n, id string) bson.D {
 	return bson.D{
-		{Key: "_id", Value: id},
+		{Key: "entity_id", Value: id},
 		{Key: "type", Value: "fake"},
 		{Key: "version", Value: uint64(1)},
 		{Key: "data", Value: bson.D{{Key: "n", Value: n}}},
@@ -64,7 +75,8 @@ func TestListSortAscendingDescending(t *testing.T) {
 	_, err := col.InsertMany(ctx, docs)
 	require.NoError(t, err)
 
-	repo := NewEntityRepository(col)
+	repo, err := NewEntityRepository(ctx, col)
+	require.NoError(t, err)
 
 	asc, err := repo.List(ctx, "fake", nil, ember.Asc("n"))
 	require.NoError(t, err)

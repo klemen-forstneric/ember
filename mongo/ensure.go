@@ -53,3 +53,29 @@ func EnsureOutbox(ctx context.Context, c *mongo.Collection) error {
 	_, err := c.Indexes().CreateMany(ctx, models)
 	return err
 }
+
+// EnsureEntities provisions the entity collection's key. Run it at startup,
+// before serving — never inside a transaction (index creation is DDL). Without
+// it, Save cannot detect a version conflict and Get finds nothing.
+//
+// Documents written before entity_id existed carry identity on _id; the backfill
+// copies it across. Those values are unique per collection by definition, so the
+// index can never fail to build on them. Idempotent: the backfill only touches
+// documents missing entity_id, and re-creating an identical index is a no-op.
+func EnsureEntities(ctx context.Context, c *mongo.Collection) error {
+	_, err := c.UpdateMany(
+		ctx,
+		bson.D{{Key: "entity_id", Value: bson.D{{Key: "$exists", Value: false}}}},
+		// An aggregation pipeline, so entity_id takes _id's value rather than the literal.
+		mongo.Pipeline{{{Key: "$set", Value: bson.D{{Key: "entity_id", Value: "$_id"}}}}},
+	)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "type", Value: 1}, {Key: "entity_id", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	})
+	return err
+}
