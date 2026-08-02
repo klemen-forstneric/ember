@@ -12,8 +12,10 @@ import (
 // psql renders `?` placeholders as Postgres `$N`.
 var psql = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
-// EntityRepository stores entities keyed by (id, type); the table needs a unique
-// constraint on that pair for Save's upsert to resolve.
+// EntityRepository stores entities keyed by (id, type). The caller owns the DDL
+// and MUST give the table a unique index on exactly (id, type) — without it every
+// Save fails on the ON CONFLICT target. See the entity-key plan under
+// docs/superpowers/plans for the required statement.
 type EntityRepository struct {
 	db    *DB
 	table string

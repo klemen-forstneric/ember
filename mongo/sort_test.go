@@ -39,7 +39,7 @@ func connectTestMongo(t *testing.T) *mongo.Collection {
 		t.Skipf("mongo unavailable: %v", err)
 	}
 	t.Cleanup(func() { _ = client.Disconnect(context.Background()) })
-	col := client.Database("ember_test").Collection(fmt.Sprintf("sort_test_%s", t.Name()))
+	col := client.Database("ember_test").Collection(fmt.Sprintf("test_%s", t.Name()))
 	t.Cleanup(func() { _ = col.Drop(context.Background()) })
 	return col
 }

@@ -58,14 +58,18 @@ func EnsureOutbox(ctx context.Context, c *mongo.Collection) error {
 // before serving — never inside a transaction (index creation is DDL). Without
 // it, Save cannot detect a version conflict and Get finds nothing.
 //
-// Documents written before entity_id existed carry identity on _id; the backfill
-// copies it across. Those values are unique per collection by definition, so the
-// index can never fail to build on them. Idempotent: the backfill only touches
-// documents missing entity_id, and re-creating an identical index is a no-op.
+// Documents written before entity_id existed carry identity on a string _id; the
+// backfill copies it across. Those values are unique per collection by definition,
+// so the index can never fail to build on them. Idempotent: the backfill only
+// touches documents missing entity_id, and re-creating an identical index is a no-op.
 func EnsureEntities(ctx context.Context, c *mongo.Collection) error {
 	_, err := c.UpdateMany(
 		ctx,
-		bson.D{{Key: "entity_id", Value: bson.D{{Key: "$exists", Value: false}}}},
+		bson.D{
+			{Key: "entity_id", Value: bson.D{{Key: "$exists", Value: false}}},
+			// A non-string _id would yield an entity_id no Get could ever match.
+			{Key: "_id", Value: bson.D{{Key: "$type", Value: "string"}}},
+		},
 		// An aggregation pipeline, so entity_id takes _id's value rather than the literal.
 		mongo.Pipeline{{{Key: "$set", Value: bson.D{{Key: "entity_id", Value: "$_id"}}}}},
 	)

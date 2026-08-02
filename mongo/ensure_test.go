@@ -104,6 +104,25 @@ func (s *EnsureEntitiesSuite) TestBackfillsLegacyDocuments() {
 	s.Equal(int64(1), n)
 }
 
+// Copying a non-string _id would produce an entity_id no Get could ever match,
+// so such a document is left alone rather than silently orphaned.
+func (s *EnsureEntitiesSuite) TestBackfillSkipsNonStringIDs() {
+	ctx := context.Background()
+	_, err := s.col.InsertOne(ctx, bson.D{
+		{Key: "_id", Value: bson.NewObjectID()},
+		{Key: "type", Value: "order"},
+		{Key: "version", Value: uint64(1)},
+		{Key: "data", Value: bson.D{{Key: "n", Value: "a"}}},
+	})
+	s.Require().NoError(err)
+
+	s.Require().NoError(EnsureEntities(ctx, s.col))
+
+	n, err := s.col.CountDocuments(ctx, bson.D{{Key: "entity_id", Value: bson.D{{Key: "$exists", Value: true}}}})
+	s.Require().NoError(err)
+	s.Zero(n, "a non-string _id must not be copied into entity_id")
+}
+
 func (s *EnsureEntitiesSuite) TestCreatesUniqueCompoundIndex() {
 	ctx := context.Background()
 	s.Require().NoError(EnsureEntities(ctx, s.col))
