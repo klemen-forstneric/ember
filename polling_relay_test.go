@@ -3,12 +3,24 @@ package ember
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 )
+
+// sameIDs matches a slice of ids regardless of order: publish groups events by
+// entity through a map, so the order it accumulates them in is not defined.
+func sameIDs(want ...string) any {
+	slices.Sort(want)
+	return mock.MatchedBy(func(got []string) bool {
+		got = slices.Clone(got)
+		slices.Sort(got)
+		return slices.Equal(got, want)
+	})
+}
 
 func evt(id, entityID string) EventEnvelope {
 	return EventEnvelope{
@@ -55,7 +67,7 @@ func (s *PollingRelaySuite) TestPublishBatchOneCallPerEntity() {
 
 	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[0], batch[1]}).Return(nil).Once()
 	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[2]}).Return(nil).Once()
-	s.repository.On("MarkPublished", mock.Anything, []string{"e1", "e2", "e3"}, mock.Anything).Return(nil).Once()
+	s.repository.On("MarkPublished", mock.Anything, sameIDs("e1", "e2", "e3"), mock.Anything).Return(nil).Once()
 
 	published, err := s.r.publish(context.Background())
 
