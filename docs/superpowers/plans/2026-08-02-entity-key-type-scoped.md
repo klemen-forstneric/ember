@@ -299,43 +299,116 @@ hazard to apply to.
 func NormalizeDocumentIDs(ctx context.Context, client *mongo.Client, c *mongo.Collection) (int, error)
 ```
 
-Replaces every string `_id` with a generated ObjectId, preserving `entity_id`,
-`type`, `version`, `data` and any other field on the document. Returns the number
-converted.
+Replaces the string `_id` with a generated ObjectId on every document whose
+`entity_id` **equals** its `_id`, preserving `type`, `version`, `data` and every
+other field byte for byte. Returns the number converted.
 
 - **Not on the boot path.** Neither `NewEntityRepository` nor `EnsureEntities`
   calls it. Run it deliberately, with the service stopped.
-- **Requires a `*mongo.Client`** because each document needs a transaction, which
-  needs a session.
+- **Only converts what `EnsureEntities` produced.** The backfill sets
+  `entity_id = $_id`, so `_id == entity_id` is exactly that set — nothing less.
+  Anything else is left alone, which is what keeps it off the outbox: an outbox
+  entry has a string `_id` *and* an `entity_id`, but they differ, and an event's id
+  lives **only** in `_id`. Rewriting one destroys the event: the relay then cannot
+  decode its own backlog (*"decoding an object ID into a string is not
+  supported"*), `MarkPublished` can never match, and the backlog freezes with
+  `expires_at` never set. Equality excludes it by construction rather than by the
+  operator being careful with collection names. Deliberately not `$expr`, which
+  DocumentDB 5.0 does not support.
 - **Delete-then-insert, one transaction per document.** Insert-then-delete cannot
   work: the unique `(type, entity_id)` index rejects the copy while the original
   is still present (verified — E11000 inside the transaction). Delete-then-insert
-  without a transaction would lose the entity if the process died between the two.
-  Both operations commit together or neither does.
-- **Resumable.** It selects on `{_id: {$type: "string"}}`, so an interrupted run
-  is resumed simply by running it again; a rolled-back document is still selected,
-  a committed one is not.
+  without a transaction loses the document if the reinsert fails (verified: the
+  count goes to zero). Both operations commit together or neither does.
+- **Takes a `*mongo.Client`** so the session requirement is visible at the call
+  site, mirroring `NewTransactor(client)`. Not strictly required — the client is
+  reachable as `c.Database().Client()` — so this is an explicitness choice, not a
+  technical one.
+- **Resumable.** It selects on `{_id: {$type: "string"}}`, so an interrupted run is
+  resumed simply by running it again; a rolled-back document is still selected, a
+  committed one is not. Interrupting it is safe.
 - **Idempotent.** A second run on a normalised collection converts zero.
-- **Skips documents without `entity_id`.** Rewriting their `_id` would destroy
-  their only identity. Run `EnsureEntities` first — which the constructor does,
-  so simply booting the service once is enough.
+- **The returned count is a lower bound.** It under-reports if a commit is retried
+  and excludes the in-flight document when it returns an error.
 
-Per service, with the service stopped:
+## Operator runbook: normalising `_id`
+
+### Prerequisite — the service must already run post-change ember
+
+**Do not normalise a service that is still deployed on pre-change ember.** The
+string `_id` is what the old code keys on; removing it while the old code is live
+twins every write and the eventual upgrade then fails its index build — Case 2
+above, service will not start.
+
+At the time of writing, five services are still pinned to `578393179ea2` and still
+call the one-arg `NewEntityRepository`: **chat, conversation, entitlement, image,
+user**. Five are on the post-change ember: auth, order, payment, subscription,
+wallet. Only the latter group is eligible.
+
+The operator snippet below runs `EnsureEntities` first. On an eligible service that
+is a genuine no-op. On one of the five it would *be* the migration, and normalise
+would then delete the `_id`s the still-deployed old code depends on. So the
+prerequisite is a hard gate, not a nicety: **check the service's `go.mod` pin and
+that the deployed build takes `(ctx, collection)` before running this.**
+
+### It is a one-way door
+
+After normalising, rolling the ember bump back re-creates Case 2 for *every*
+entity in the collection, not merely those written during a window: old ember
+matches nothing, so every write twins. The "Superseded" note above is right that
+there is no *concurrent* overlap to worry about, but it is wrong to conclude the
+hazard is void — it survives as this prerequisite and as a rollback constraint.
+Normalise only once the ember bump is one you are prepared not to revert.
+
+### Before the window
+
+- **Take a snapshot** of each database. Nothing here is designed to be undone.
+- **Confirm the deployment supports transactions** — a replica set or mongos. On a
+  standalone it fails closed with *"(IllegalOperation) Transaction numbers are only
+  allowed on a replica set member or mongos"* before converting anything, so it is
+  safe, but discover that beforehand rather than during the window.
+- **On DocumentDB, connect with `retryWrites=false`.**
+- **Size it.** Measured 2.0 ms/document against a local single-node replica set, so
+  100k entities ≈ 3m22s; expect materially worse across availability zones. One
+  transaction per document is the cost of not being able to lose one. It resumes,
+  so an over-running job can be stopped and continued.
+
+### Where the code lives
+
+Not ten hand-edited `main.go` files. One small one-off tool taking `--uri`, `--db`
+and `--collection`, run once per service, is the right shape — it keeps the
+prerequisite check and the logging in one place and leaves no edits behind in the
+services.
 
 ```go
-client, err := mongo.Connect(options.Client().ApplyURI(uri))
-// ...
-col := client.Database(dbName).Collection("entities")
+import (
+    "go.mongodb.org/mongo-driver/v2/mongo"
+    "go.mongodb.org/mongo-driver/v2/mongo/options"
 
-if err := mongo.EnsureEntities(ctx, col); err != nil {   // no-op if already migrated
+    embermongo "github.com/klemen-forstneric/ember/mongo"
+)
+
+client, err := mongo.Connect(options.Client().ApplyURI(uri))
+if err != nil {
     return err
 }
-n, err := mongo.NormalizeDocumentIDs(ctx, client, col)
+defer client.Disconnect(ctx)
+
+col := client.Database(db).Collection(collection) // the entities collection
+
+// A no-op on an eligible service; see the prerequisite above.
+if err := embermongo.EnsureEntities(ctx, col); err != nil {
+    return err
+}
+n, err := embermongo.NormalizeDocumentIDs(ctx, client, col)
 if err != nil {
     return err
 }
 log.Printf("normalized %d entity documents", n)
 ```
 
-Order across the ten services does not matter, and a service that is never
-normalised keeps working — the mixed shape is inert.
+Note the two `mongo` packages: `mongo` is the driver, `embermongo` is ember's — the
+alias the ten services already use.
+
+Order across services does not matter, and a service that is never normalised
+keeps working: the mixed `_id` shape is inert.

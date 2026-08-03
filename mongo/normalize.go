@@ -8,40 +8,43 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// NormalizeDocumentIDs replaces every string _id with a generated ObjectId,
-// preserving the rest of the document. Operator-invoked with the service stopped:
-// it is deliberately not called by NewEntityRepository or EnsureEntities, which
-// run on every boot of every service and must stay cheap. Returns the number of
-// documents converted.
+// NormalizeDocumentIDs replaces a string _id with a generated ObjectId on every
+// document whose entity_id equals its _id — exactly the set EnsureEntities
+// backfilled, so run that first. Anything else is left alone, which is what keeps
+// it off the outbox, whose ids live only in _id.
 //
-// _id is immutable, so each document is deleted and reinserted inside one
-// transaction — a crash can neither lose an entity nor leave a duplicate, and
-// re-running converts only what is left. Documents without entity_id are skipped;
-// rewriting their _id would destroy their only identity, so run EnsureEntities
-// first.
+// Operator-invoked with the service stopped; deliberately not called by
+// NewEntityRepository or EnsureEntities, which run on every boot and must stay
+// cheap. The returned count is a lower bound — it under-reports a retried commit
+// and excludes the in-flight document on error.
 func NormalizeDocumentIDs(ctx context.Context, client *mongo.Client, c *mongo.Collection) (int, error) {
-	selector := bson.D{
-		{Key: "_id", Value: bson.D{{Key: "$type", Value: "string"}}},
-		{Key: "entity_id", Value: bson.D{{Key: "$exists", Value: true}}},
-	}
+	selector := bson.D{{Key: "_id", Value: bson.D{{Key: "$type", Value: "string"}}}}
+	projection := bson.D{{Key: "_id", Value: 1}, {Key: "entity_id", Value: 1}}
 
 	// Collect the ids before deleting anything: mutating a collection while
 	// iterating its own cursor can skip or revisit documents.
-	cur, err := c.Find(ctx, selector, options.Find().SetProjection(bson.D{{Key: "_id", Value: 1}}))
+	cur, err := c.Find(ctx, selector, options.Find().SetProjection(projection))
 	if err != nil {
 		return 0, err
 	}
-	var stale []struct {
-		ID string `bson:"_id"`
-	}
-	if err := cur.All(ctx, &stale); err != nil {
+	var rows []bson.Raw
+	if err := cur.All(ctx, &rows); err != nil {
 		return 0, err
+	}
+
+	stale := make([]string, 0, len(rows))
+	for _, row := range rows {
+		id, ok := convertible(row)
+		if !ok {
+			continue
+		}
+		stale = append(stale, id)
 	}
 
 	tx := NewTransactor(client)
 	var n int
-	for _, doc := range stale {
-		converted, err := normalizeOne(ctx, tx, c, doc.ID)
+	for _, id := range stale {
+		converted, err := normalizeOne(ctx, tx, c, id)
 		if err != nil {
 			return n, err
 		}
@@ -50,6 +53,16 @@ func NormalizeDocumentIDs(ctx context.Context, client *mongo.Client, c *mongo.Co
 		}
 	}
 	return n, nil
+}
+
+// convertible reports whether _id is duplicated into entity_id, so rewriting it
+// cannot lose the document's identity. Compared as raw values so that a non-string
+// entity_id fails the test rather than failing to decode.
+func convertible(row bson.Raw) (string, bool) {
+	if !row.Lookup("_id").Equal(row.Lookup("entity_id")) {
+		return "", false
+	}
+	return row.Lookup("_id").StringValueOK()
 }
 
 // normalizeOne reinserts one document without its _id. Delete must precede
