@@ -58,7 +58,7 @@ Identity moves off `_id` onto an explicit, type-scoped compound key.
 
 Rejected: a composite `_id` of `type/id`. Semantically equivalent, but `_id` is
 immutable, so migrating existing documents means delete-and-reinsert for every
-entity in ten live databases. Backfilling `entity_id` is an in-place `$set`.
+entity in the affected database. Backfilling `entity_id` is an in-place `$set`.
 
 Rejected: one collection per entity type. It works around the library's
 inconsistency rather than fixing it, and leaves the next service to reuse an id
@@ -412,3 +412,35 @@ alias the ten services already use.
 
 Order across services does not matter, and a service that is never normalised
 keeps working: the mixed `_id` shape is inert.
+
+## Who actually needs this
+
+**One service is in production: `conversation-service`.** The other nine are
+local or dev, so their collections can be dropped and recreated rather than
+migrated. Earlier revisions of this plan described the change as touching "ten
+live databases", which overstated the stakes and made the delete-and-reinsert
+question look riskier than it is.
+
+**conversation-service does not need this fix.** It binds four entity types to
+one `entities` collection — Conversation, Message, Memory, Backlog — which is the
+shape the bug affects, but only when two types deliberately share an id. All four
+take ids from `skuuid.IDer`, so they never collide. auth-service is the only
+service that deliberately reuses an id across types (`Revocation`'s id **is** its
+`Identity`'s id), and it is the reason this fix exists.
+
+It also cannot take the bump yet: it is pinned to `578393179ea2` and has four
+two-arg `NewEntityStore(r, marshaler)` call sites, all of which break on the new
+ember. Same for `chat`, `entitlement`, `image` and `user`.
+
+So production stays untouched. conversation-service migrates when it adopts
+ember's unit of work — tracked separately, and it has to change those four call
+sites for that anyway. At that point the pin bump, the `NewEntityStore` migration
+and `EnsureEntities` land together in one reviewed change, and `EnsureEntities`
+runs automatically via the constructor, so the backfill and the index come for
+free. Only `NormalizeDocumentIDs` would be a deliberate extra step, and it stays
+optional — the mixed `_id` shape is inert.
+
+Running the backfill or the normalisation against any of those five **while the
+old code is still deployed** produces the unstartable-service case in "Deployment
+constraint": old ember filters on `{_id: "<string id>", version}`, matches nothing
+after normalisation, and twins on every write.
