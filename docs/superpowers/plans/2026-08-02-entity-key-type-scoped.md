@@ -257,31 +257,85 @@ stop is the honest option.
   `entity_id` orphans the document permanently and silently; see the migration
   section.
 
-### Why the migration leaves `_id` alone
+### Why the backfill leaves `_id` alone — and how to resolve it afterwards
 
-Migrated documents keep their string `_id`; documents written afterwards get an
-ObjectId. The shape is mixed, deliberately.
+The backfill leaves `_id` as it finds it, so migrated documents keep their string
+`_id` while documents written afterwards get an ObjectId. That mixed shape is
+correct but untidy, and it is resolved out of band by `NormalizeDocumentIDs`
+(below), not by the backfill.
 
-`_id` cannot be rewritten in the backfill pipeline — Mongo rejects any update
-that alters it (*"the (immutable) field '_id' was found to have been altered"*),
-in both a pipeline update and a plain `$set`; verified against mongo:7. Changing
-it means inserting a copy and deleting the original, which is the
-delete-and-reinsert migration this plan rejected in its Decision section.
+Two reasons the backfill cannot do it:
 
-Nothing depends on it. After this change the entity path never reads or writes
-`_id`: `Save` filters on `{type, entity_id, version}`, `Get` on
+`_id` is immutable. Mongo rejects any update that alters it (*"the (immutable)
+field '_id' was found to have been altered"*), in both a pipeline update and a
+plain `$set`; verified against mongo:7. Changing it requires deleting the document
+and reinserting it, which no update pipeline can express.
+
+`EnsureEntities` runs on every boot of all ten services, so it must stay a cheap
+no-op once migrated. A scan-delete-reinsert over the whole entities collection is
+the opposite of that, and it needs transactions, which index creation must not be
+inside. So it belongs in a standalone operator-invoked run, not on a boot path.
+
+Nothing depends on `_id` either way. After this change the entity path never reads
+or writes it: `Save` filters on `{type, entity_id, version}`, `Get` on
 `{type, entity_id}`, `List` on `type`, and `filter.go` maps the `"id"` path to
 `entity_id`. The `document` struct carries no `_id` field at all, which is why a
-replacement preserves it on update and lets Mongo generate one on insert.
+replacement preserves it on update and lets Mongo generate one on insert. So
+normalising is a cleanup, not a correctness fix — nothing breaks if it is never
+run.
 
-Normalising would also make the rolling-deploy hazard worse, not better. Old
-ember filters on `{_id: "<string id>", version}`. While pre-existing documents
-keep their string `_id`, an overlapping old-ember instance still matches and
-correctly updates them, and only entities *created* during the window get
-twinned. Normalise them all to ObjectIds and old ember matches nothing, so every
-write from an overlapping instance twins.
+**Superseded:** an earlier revision of this section also argued that normalising
+would worsen the rolling-deploy hazard, because old ember filters on
+`{_id: "<string id>", version}` and would match nothing once every `_id` is an
+ObjectId, twinning every overlapping write. That argument is void: this plan
+already mandates a hard stop-start with no old/new overlap (see "Deployment
+constraint"), and the rollout happens in a low-traffic maintenance window with
+nothing consuming old data. There is no overlapping old-ember instance for the
+hazard to apply to.
 
-Finally, `EnsureEntities` runs on every boot of all ten services, so it must stay
-a cheap no-op once migrated. A scan-copy-delete over the whole entities
-collection is the opposite of that. If the mixed shape ever needs resolving, it
-belongs in a standalone one-off run with the service stopped, not on a boot path.
+### `NormalizeDocumentIDs` — operator-invoked cleanup
+
+```go
+func NormalizeDocumentIDs(ctx context.Context, client *mongo.Client, c *mongo.Collection) (int, error)
+```
+
+Replaces every string `_id` with a generated ObjectId, preserving `entity_id`,
+`type`, `version`, `data` and any other field on the document. Returns the number
+converted.
+
+- **Not on the boot path.** Neither `NewEntityRepository` nor `EnsureEntities`
+  calls it. Run it deliberately, with the service stopped.
+- **Requires a `*mongo.Client`** because each document needs a transaction, which
+  needs a session.
+- **Delete-then-insert, one transaction per document.** Insert-then-delete cannot
+  work: the unique `(type, entity_id)` index rejects the copy while the original
+  is still present (verified — E11000 inside the transaction). Delete-then-insert
+  without a transaction would lose the entity if the process died between the two.
+  Both operations commit together or neither does.
+- **Resumable.** It selects on `{_id: {$type: "string"}}`, so an interrupted run
+  is resumed simply by running it again; a rolled-back document is still selected,
+  a committed one is not.
+- **Idempotent.** A second run on a normalised collection converts zero.
+- **Skips documents without `entity_id`.** Rewriting their `_id` would destroy
+  their only identity. Run `EnsureEntities` first — which the constructor does,
+  so simply booting the service once is enough.
+
+Per service, with the service stopped:
+
+```go
+client, err := mongo.Connect(options.Client().ApplyURI(uri))
+// ...
+col := client.Database(dbName).Collection("entities")
+
+if err := mongo.EnsureEntities(ctx, col); err != nil {   // no-op if already migrated
+    return err
+}
+n, err := mongo.NormalizeDocumentIDs(ctx, client, col)
+if err != nil {
+    return err
+}
+log.Printf("normalized %d entity documents", n)
+```
+
+Order across the ten services does not matter, and a service that is never
+normalised keeps working — the mixed shape is inert.
