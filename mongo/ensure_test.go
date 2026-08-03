@@ -2,6 +2,7 @@ package mongo
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
@@ -121,6 +122,33 @@ func (s *EnsureEntitiesSuite) TestBackfillSkipsNonStringIDs() {
 	n, err := s.col.CountDocuments(ctx, bson.D{{Key: "entity_id", Value: bson.D{{Key: "$exists", Value: true}}}})
 	s.Require().NoError(err)
 	s.Zero(n, "a non-string _id must not be copied into entity_id")
+}
+
+// The backfill bulk-writes in fixed-size batches, so a collection larger than one
+// batch must still come out fully migrated rather than truncated at the boundary.
+func (s *EnsureEntitiesSuite) TestBackfillsEveryDocumentAcrossBatches() {
+	ctx := context.Background()
+	const n = backfillBatch + 7
+
+	docs := make([]any, 0, n)
+	for i := range n {
+		docs = append(docs, legacyDoc(strconv.Itoa(i), "order", 1, "a"))
+	}
+	_, err := s.col.InsertMany(ctx, docs)
+	s.Require().NoError(err)
+
+	s.Require().NoError(EnsureEntities(ctx, s.col))
+
+	missing, err := s.col.CountDocuments(ctx, bson.D{{Key: "entity_id", Value: bson.D{{Key: "$exists", Value: false}}}})
+	s.Require().NoError(err)
+	s.Zero(missing)
+
+	// Each entity_id must be its own document's _id, not a neighbour's.
+	wrong, err := s.col.CountDocuments(ctx, bson.D{
+		{Key: "$expr", Value: bson.D{{Key: "$ne", Value: bson.A{"$_id", "$entity_id"}}}},
+	})
+	s.Require().NoError(err)
+	s.Zero(wrong)
 }
 
 func (s *EnsureEntitiesSuite) TestCreatesUniqueCompoundIndex() {

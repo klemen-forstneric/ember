@@ -74,7 +74,12 @@ func EnsureEntities(ctx context.Context, c *mongo.Collection) error {
 	return err
 }
 
-// backfillEntityIDs copies a string _id into entity_id, one document per update.
+// backfillBatch is how many $set statements go in one bulk write. Each is a few
+// dozen bytes, so the batch stays far below the 16MB command limit while keeping
+// the round trips proportional to batches rather than documents.
+const backfillBatch = 1000
+
+// backfillEntityIDs copies a string _id into entity_id, one $set per document.
 // A pipeline update would do it in a single round trip, but DocumentDB 5.0 rejects
 // the $set stage and errors on every call regardless of how many documents match,
 // while the plain object form would write the literal "$_id" into every document.
@@ -99,11 +104,27 @@ func backfillEntityIDs(ctx context.Context, c *mongo.Collection) error {
 		return err
 	}
 
-	for _, row := range rows {
-		update := bson.D{{Key: "$set", Value: bson.D{{Key: "entity_id", Value: row.ID}}}}
-		if _, err := c.UpdateByID(ctx, row.ID, update); err != nil {
+	models := make([]mongo.WriteModel, 0, min(len(rows), backfillBatch))
+	flush := func() error {
+		if len(models) == 0 {
+			return nil
+		}
+		if _, err := c.BulkWrite(ctx, models); err != nil {
 			return err
 		}
+		models = models[:0]
+		return nil
 	}
-	return nil
+
+	for _, row := range rows {
+		models = append(models, mongo.NewUpdateOneModel().
+			SetFilter(bson.D{{Key: "_id", Value: row.ID}}).
+			SetUpdate(bson.D{{Key: "$set", Value: bson.D{{Key: "entity_id", Value: row.ID}}}}))
+		if len(models) == backfillBatch {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	return flush()
 }
