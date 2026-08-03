@@ -112,11 +112,23 @@ collections separately.
 `EnsureEntities(ctx, *mongo.Collection)` — called by the constructor, and
 exported for standalone use. Idempotent, no deletes:
 
-1. `UpdateMany({entity_id: {$exists: false}}, [{$set: {entity_id: "$_id"}}])` —
-   an aggregation-pipeline update, so `entity_id` takes the existing `_id`'s
-   value. Old documents keep their string `_id`; new ones get ObjectIds. Mixed
-   `_id` types in one collection are fine.
+1. Collect the `_id`s of documents matching
+   `{entity_id: {$exists: false}, _id: {$type: "string"}}`, then one
+   `UpdateByID(id, {$set: {entity_id: id}})` per document. Old documents keep
+   their string `_id`; new ones get ObjectIds. Mixed `_id` types in one
+   collection are fine.
 2. Create the unique index on `{type: 1, entity_id: 1}`.
+
+A single `UpdateMany` with a pipeline update (`[{$set: {entity_id: "$_id"}}]`)
+expresses step 1 in one round trip, but DocumentDB 5.0 does not support `$set`
+as an aggregation stage and rejects pipeline-form updates with *"Wrong type for
+parameter u"*. That error comes from parsing the update, so it fires on every
+call regardless of how many documents match — including the zero-match steady
+state after a completed migration. Since the constructor calls
+`EnsureEntities`, a pipeline update makes every service on DocumentDB fail to
+start. The plain object form is not an alternative either: `{$set: {entity_id:
+"$_id"}}` writes the literal string `"$_id"` into every matched document and
+reports success.
 
 The backfill is restricted to string `_id`s. Copying an ObjectId `_id` would set
 `entity_id` to an ObjectId, which no `Get` — comparing a string — could ever
