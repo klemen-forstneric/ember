@@ -235,10 +235,26 @@ func (s *NormalizeDocumentIDsSuite) TestFailedReinsertRollsBackTheDelete() {
 	s.Equal(before, s.fieldBytes(s.rawDocument(bson.D{{Key: "_id", Value: "old1"}})))
 }
 
-// Ids are collected before any delete, so a collection large enough to span
-// several cursor batches still converts every document exactly once.
+// The id list is collected before any delete, so an id that no longer resolves
+// is skipped rather than counted or aborting the chunk around it.
+func (s *NormalizeDocumentIDsSuite) TestSkipsIdsThatNoLongerResolve() {
+	ctx := context.Background()
+	s.seedLegacy(legacyDoc("old1", "order", 1, "a"))
+
+	tx := NewTransactor(s.col.Database().Client())
+	moved, err := normalizeBatch(ctx, tx, s.col, []string{"old1", "never-existed"})
+	s.Require().NoError(err)
+	s.Equal(1, moved)
+
+	s.Equal(int64(1), s.count())
+	s.Zero(s.countIDsOfType("string"))
+}
+
+// Documents move one chunk per transaction, so a collection spanning several
+// chunks must still convert every document exactly once — none dropped at a
+// boundary, none converted twice.
 func (s *NormalizeDocumentIDsSuite) TestConvertsEveryDocumentAcrossBatches() {
-	const total = 200
+	const total = normalizeChunk*2 + 7
 
 	docs := make([]bson.D, total)
 	for i := range docs {
