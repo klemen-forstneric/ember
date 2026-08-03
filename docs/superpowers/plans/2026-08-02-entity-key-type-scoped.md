@@ -444,3 +444,33 @@ Running the backfill or the normalisation against any of those five **while the
 old code is still deployed** produces the unstartable-service case in "Deployment
 constraint": old ember filters on `{_id: "<string id>", version}`, matches nothing
 after normalisation, and twins on every write.
+
+## Sequencing: normalise in the same window as the bump
+
+A database is only ever inconsistent if the job is left half-done. Before the
+bump every document has a string `_id` and no `entity_id` — uniform. After a bump
+*without* normalisation, migrated documents keep string `_id`s while everything
+written afterwards gets an ObjectId — mixed, indefinitely. After a bump *with*
+normalisation, every document has an ObjectId `_id` and an `entity_id` — uniform
+again.
+
+So run `NormalizeDocumentIDs` (or the manual equivalent) inside the same
+maintenance window as the ember bump, not as a later tidy-up. The collection goes
+uniform-old → uniform-new and never occupies the mixed state:
+
+    stop the service
+    snapshot
+    backfill entity_id            (EnsureEntities step 1, or manual)
+    create the unique index       (EnsureEntities step 2, or manual)
+    normalise _id
+    deploy the new ember + call-site changes
+    start
+
+**Rollback after normalisation is restore-from-snapshot, not restart-the-old-binary.**
+Pre-change ember filters on `{_id: "<string id>", version}` and matches nothing in
+a normalised collection, so it twins on every write and the next index build
+fails. The snapshot is the only rollback path, which is why it is a step and not
+a suggestion.
+
+For conversation-service specifically, that window is its unit-of-work adoption —
+it has to change four `NewEntityStore(r, marshaler)` call sites for that anyway.
