@@ -256,3 +256,32 @@ stop is the honest option.
 - **The backfill must skip non-string `_id`s.** Copying an ObjectId into
   `entity_id` orphans the document permanently and silently; see the migration
   section.
+
+### Why the migration leaves `_id` alone
+
+Migrated documents keep their string `_id`; documents written afterwards get an
+ObjectId. The shape is mixed, deliberately.
+
+`_id` cannot be rewritten in the backfill pipeline — Mongo rejects any update
+that alters it (*"the (immutable) field '_id' was found to have been altered"*),
+in both a pipeline update and a plain `$set`; verified against mongo:7. Changing
+it means inserting a copy and deleting the original, which is the
+delete-and-reinsert migration this plan rejected in its Decision section.
+
+Nothing depends on it. After this change the entity path never reads or writes
+`_id`: `Save` filters on `{type, entity_id, version}`, `Get` on
+`{type, entity_id}`, `List` on `type`, and `filter.go` maps the `"id"` path to
+`entity_id`. The `document` struct carries no `_id` field at all, which is why a
+replacement preserves it on update and lets Mongo generate one on insert.
+
+Normalising would also make the rolling-deploy hazard worse, not better. Old
+ember filters on `{_id: "<string id>", version}`. While pre-existing documents
+keep their string `_id`, an overlapping old-ember instance still matches and
+correctly updates them, and only entities *created* during the window get
+twinned. Normalise them all to ObjectIds and old ember matches nothing, so every
+write from an overlapping instance twins.
+
+Finally, `EnsureEntities` runs on every boot of all ten services, so it must stay
+a cheap no-op once migrated. A scan-copy-delete over the whole entities
+collection is the opposite of that. If the mixed shape ever needs resolving, it
+belongs in a standalone one-off run with the service stopped, not on a boot path.
