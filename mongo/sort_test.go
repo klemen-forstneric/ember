@@ -3,46 +3,13 @@ package mongo
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/klemen-forstneric/ember"
 )
-
-// testMongoURI is the DSN for integration tests. A replica set that advertises
-// a hostname the test process cannot resolve (docker compose) needs
-// EMBER_TEST_MONGO=mongodb://localhost:27017/?directConnection=true
-func testMongoURI() string {
-	if v := os.Getenv("EMBER_TEST_MONGO"); v != "" {
-		return v
-	}
-	return "mongodb://localhost:27017"
-}
-
-// connectTestMongo dials a local Mongo instance and returns a collection
-// scoped to this test run. It skips the test when no Mongo is reachable.
-func connectTestMongo(t *testing.T) *mongo.Collection {
-	t.Helper()
-	ctx := context.Background()
-	client, err := mongo.Connect(options.Client().ApplyURI(testMongoURI()))
-	if err != nil {
-		t.Skipf("mongo unavailable: %v", err)
-	}
-	if err := client.Ping(ctx, nil); err != nil {
-		_ = client.Disconnect(ctx)
-		t.Skipf("mongo unavailable: %v", err)
-	}
-	t.Cleanup(func() { _ = client.Disconnect(context.Background()) })
-	col := client.Database("ember_test").Collection(fmt.Sprintf("test_%s", t.Name()))
-	t.Cleanup(func() { _ = col.Drop(context.Background()) })
-	return col
-}
 
 func makeEntity(n, id string) bson.D {
 	return bson.D{
