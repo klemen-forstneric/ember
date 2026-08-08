@@ -35,6 +35,28 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 	require.True(t, in.Timestamp.Equal(out.Timestamp))
 }
 
+func TestEncodeDecodeRoundTripsTheOrderingKey(t *testing.T) {
+	e := ember.EventEnvelope{
+		ID:        "e1",
+		EntityID:  "A",
+		Version:   7,
+		Index:     2,
+		Event:     &ember.MarshaledEvent{Type: "Created", Data: []byte(`{"k":"v"}`)},
+		Metadata:  ember.Metadata{ember.MetadataKey("corr"): "c-1"},
+		Timestamp: time.Unix(1_700_000_000, 0).UTC(),
+	}
+
+	b, err := encode(e)
+	require.NoError(t, err)
+	got, err := decode(b)
+
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), got.Version)
+	require.Equal(t, 2, got.Index)
+	require.Equal(t, e.EntityID, got.EntityID)
+	require.Equal(t, e.Event.Type, got.Event.Type)
+}
+
 func TestDecodeRejectsMalformedPayload(t *testing.T) {
 	_, err := decode([]byte(`not json`))
 	require.Error(t, err)

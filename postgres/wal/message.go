@@ -12,6 +12,8 @@ import (
 type message struct {
 	ID        string          `json:"id"`
 	EntityID  string          `json:"entity_id"`
+	Version   uint64          `json:"version"`
+	Idx       int             `json:"idx"`
 	Type      string          `json:"type"`
 	Data      json.RawMessage `json:"data"`
 	Metadata  ember.Metadata  `json:"metadata,omitempty"`
@@ -22,6 +24,8 @@ func encode(e ember.EventEnvelope) ([]byte, error) {
 	return json.Marshal(message{
 		ID:        e.ID,
 		EntityID:  e.EntityID,
+		Version:   e.Version,
+		Idx:       e.Index,
 		Type:      e.Event.Type,
 		Data:      e.Event.Data,
 		Metadata:  e.Metadata,
@@ -37,6 +41,8 @@ func decode(b []byte) (ember.EventEnvelope, error) {
 	return ember.EventEnvelope{
 		ID:        m.ID,
 		EntityID:  m.EntityID,
+		Version:   m.Version,
+		Index:     m.Idx,
 		Event:     &ember.MarshaledEvent{Type: m.Type, Data: m.Data},
 		Metadata:  m.Metadata,
 		Timestamp: m.Timestamp,
