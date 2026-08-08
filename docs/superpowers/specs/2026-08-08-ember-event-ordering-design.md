@@ -179,8 +179,10 @@ type PollingRelayRepository interface {
 ```
 
 Contract: pick up to `maxEntities` distinct `entity_id`s **at random** from the unpublished
-set, return up to `maxEventsPerEntity` events for each, flat, ordered by
-`(entity_id, version, index)`. Ordering is the repository's job — the relay groups while
+set, return up to `maxEventsPerEntity` events for each, flat, grouped by entity and
+version-ordered within each entity; cross-entity order is unspecified. Ordering is the
+repository's job — the relay buckets by `EntityID` before publishing, so cross-entity order
+is irrelevant to it, which is why the weaker guarantee is sufficient; the relay groups while
 preserving arrival order and does not re-sort.
 
 Postgres, one statement:
