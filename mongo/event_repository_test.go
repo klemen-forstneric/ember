@@ -106,7 +106,7 @@ func (s *EventRepositorySuite) TestListUnpublishedCapsEntitiesAndEventsPerEntity
 	}
 	s.Len(perEntity, 2, "at most two entities per round")
 	for entity, versions := range perEntity {
-		s.LessOrEqual(len(versions), 3, "at most three events for %s", entity)
+		s.Len(versions, 3, "entity %s has enough backlog to fill its cap", entity)
 		s.Equal(uint64(1), versions[0], "each entity's run must start at its lowest unpublished version")
 		s.True(slices.IsSorted(versions), "each entity's run must be version-ordered")
 	}

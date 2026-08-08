@@ -195,11 +195,13 @@ WITH picked AS (
 SELECT * FROM ranked WHERE rn <= $2 ORDER BY entity_id, version, idx;
 ```
 
-Mongo takes two round trips — `$match` + `$group` + `$sample` for the keys, then a `find`
-on `entity_id ∈ keys` sorted `(entity_id, version, idx)` with limit
-`maxEntities × maxEventsPerEntity`, truncated per group in Go. Truncating a version-ordered
-run leaves a valid prefix, so the cut is safe wherever it lands. Avoiding
-`$setWindowFields` is deliberate: DocumentDB compatibility is worth the second query.
+Mongo takes 1 + K round trips — `$match` + `$group` + `$sample` for the keys, then one
+`find` per sampled entity, filtered on that `entity_id`, sorted `(version, idx)`, limited to
+`maxEventsPerEntity`. A single `find` across all keys with a shared `maxEntities ×
+maxEventsPerEntity` limit was tried first, but the shared budget let one early-sorting,
+backlog-heavy entity starve the rest — per-entity fairness is the property this whole
+change exists to deliver, so each entity gets its own capped query instead. Avoiding
+`$setWindowFields` is deliberate: DocumentDB compatibility is worth the extra queries.
 
 ### Config
 

@@ -168,7 +168,7 @@ func (s *NormalizeDocumentIDsSuite) TestLeavesOutboxEntriesAlone() {
 	// The relay must still be able to read its own backlog.
 	got, err := events.ListUnpublished(ctx, 10, 10)
 	s.Require().NoError(err)
-	s.Equal([]string{"evt1", "evt2"}, ids(got))
+	s.ElementsMatch([]string{"evt1", "evt2"}, ids(got))
 
 	s.Equal(before, s.fieldBytes(s.rawDocument(bson.D{{Key: "_id", Value: "evt1"}})))
 }

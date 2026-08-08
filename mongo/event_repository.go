@@ -72,53 +72,51 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, maxEntities, maxE
 		return nil, err
 	}
 
-	opts := options.Find().
-		SetSort(bson.D{{Key: "entity_id", Value: 1}, {Key: "version", Value: 1}, {Key: "idx", Value: 1}}).
-		SetLimit(int64(maxEntities * maxEventsPerEntity))
-	filter := bson.D{
-		{Key: "published", Value: false},
-		{Key: "entity_id", Value: bson.D{{Key: "$in", Value: keys}}},
-	}
-	cur, err := r.collection.Find(ctx, filter, opts)
-	if err != nil {
-		return nil, err
-	}
-	defer cur.Close(ctx)
-
-	var (
-		out    []ember.EventEnvelope
-		counts = make(map[string]int, len(keys))
-	)
-	for cur.Next(ctx) {
-		var d entry
-		if err := cur.Decode(&d); err != nil {
-			return nil, err
+	var out []ember.EventEnvelope
+	for _, key := range keys {
+		opts := options.Find().
+			SetSort(bson.D{{Key: "version", Value: 1}, {Key: "idx", Value: 1}}).
+			SetLimit(int64(maxEventsPerEntity))
+		filter := bson.D{
+			{Key: "published", Value: false},
+			{Key: "entity_id", Value: key},
 		}
-		if counts[d.EntityID] == maxEventsPerEntity {
-			continue
-		}
-		counts[d.EntityID]++
-
-		data, err := bson.MarshalExtJSON(d.Data, false, false)
+		cur, err := r.collection.Find(ctx, filter, opts)
 		if err != nil {
 			return nil, err
 		}
 
-		out = append(out, ember.EventEnvelope{
-			ID:       d.ID,
-			EntityID: d.EntityID,
-			Version:  d.Version,
-			Index:    d.Idx,
-			Event: &ember.MarshaledEvent{
-				Type: d.Type,
-				Data: data,
-			},
-			Metadata:  d.Metadata,
-			Timestamp: d.CreatedAt,
-		})
-	}
-	if err := cur.Err(); err != nil {
-		return nil, err
+		for cur.Next(ctx) {
+			var d entry
+			if err := cur.Decode(&d); err != nil {
+				cur.Close(ctx)
+				return nil, err
+			}
+
+			data, err := bson.MarshalExtJSON(d.Data, false, false)
+			if err != nil {
+				cur.Close(ctx)
+				return nil, err
+			}
+
+			out = append(out, ember.EventEnvelope{
+				ID:       d.ID,
+				EntityID: d.EntityID,
+				Version:  d.Version,
+				Index:    d.Idx,
+				Event: &ember.MarshaledEvent{
+					Type: d.Type,
+					Data: data,
+				},
+				Metadata:  d.Metadata,
+				Timestamp: d.CreatedAt,
+			})
+		}
+		err = cur.Err()
+		cur.Close(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }
