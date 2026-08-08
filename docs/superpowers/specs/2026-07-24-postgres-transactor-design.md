@@ -99,14 +99,20 @@ Table columns (caller owns DDL):
 | `type`        | text          | event type                              |
 | `data`        | jsonb         | marshaled event payload                 |
 | `metadata`    | jsonb         | `ember.Metadata`                        |
-| `seq`         | bigint        | `Timestamp.UnixNano()`, ordering key    |
+| `version`     | bigint        | emitting entity's version, 0 = unordered |
+| `idx`         | int           | event index within that save            |
 | `created_at`  | timestamptz   | envelope timestamp                      |
 | `published`   | boolean       | default false                           |
 | `published_at`| timestamptz null |                                      |
 | `expires_at`  | timestamptz null |                                      |
 
 - `Save(ctx, envelopes)`: no-op on empty; one multi-row `INSERT` (`published=false`), through the ctx querier so it joins the entity's tx. `data`/`metadata` marshaled to JSON for the jsonb columns.
-- `ListUnpublished(ctx, limit)`: `SELECT ... WHERE published = false ORDER BY seq ASC` (apply `LIMIT` when `limit > 0`); scan back into `[]ember.EventEnvelope` (`Event.Type`/`Data` from `type`/`data`, `Metadata` from `metadata`, `Timestamp` from `created_at`).
+- `ListUnpublished(ctx, maxEntities, maxEventsPerEntity)`: samples up to `maxEntities` distinct `entity_id`s with `ORDER BY random()`, then returns each one's first `maxEventsPerEntity` events by `(version, idx)`, flat, ordered by `(entity_id, version, idx)`.
+
+```sql
+CREATE INDEX outbox_pending ON outbox (entity_id, version, idx) WHERE NOT published;
+```
+
 - `MarkPublished(ctx, ids, expiresAt)`: no-op on empty; `UPDATE ... SET published = true, published_at = now(), expires_at = $ WHERE id = ANY($ids)`.
 
 ## Data flow (pg-backed EntitySaver)
@@ -140,7 +146,7 @@ saver.Save(ctx, order)   // order emitted events
 - **EntityRepository tx-routing** (`entity_repository_test.go`, extend): a `Save` invoked inside `WithinTx` issues its `Exec` within the begun tx (sqlmock records it between Begin and Commit); a standalone `Save` issues `Exec` with no Begin. Version-conflict: result with `RowsAffected() == 0` → `ErrVersionConflict`.
 - **EventRepository** (`event_repository_test.go`):
   - `Save`: expected `INSERT` with the right columns/args for N envelopes; empty slice is a no-op (no query).
-  - `ListUnpublished`: expected `SELECT ... WHERE published = false ORDER BY seq ASC` (+ `LIMIT` when set); feed mock rows and assert they map back to `EventEnvelope` (type/data/metadata/timestamp).
+  - `ListUnpublished`: expected CTE query with `ORDER BY random()` and the two limit args; feed mock rows and assert they map back to `EventEnvelope` (type/data/metadata/version/idx/timestamp).
   - `MarkPublished`: expected `UPDATE` setting published/published_at/expires_at for the given ids; empty ids is a no-op.
 
 ## Files

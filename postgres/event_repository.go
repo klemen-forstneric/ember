@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
@@ -28,7 +29,7 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 	}
 
 	insert := psql.Insert(r.table).
-		Columns("id", "entity_id", "type", "data", "metadata", "seq", "created_at", "published")
+		Columns("id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at", "published")
 
 	for _, e := range envelopes {
 		metadata, err := json.Marshal(e.Metadata)
@@ -42,7 +43,8 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 			e.Event.Type,
 			e.Event.Data,
 			metadata,
-			e.Timestamp.UnixNano(),
+			int64(e.Version),
+			e.Index,
 			e.Timestamp.UTC(),
 			false,
 		)
@@ -56,22 +58,19 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 	return err
 }
 
-func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]ember.EventEnvelope, error) {
-	qb := psql.
-		Select("id", "entity_id", "type", "data", "metadata", "created_at").
-		From(r.table).
-		Where(sq.Eq{"published": false}).
-		OrderBy("seq ASC")
+func (r *EventRepository) ListUnpublished(ctx context.Context, maxEntities, maxEventsPerEntity int) ([]ember.EventEnvelope, error) {
+	query := fmt.Sprintf(`
+WITH picked AS (
+  SELECT DISTINCT entity_id FROM %[1]s WHERE NOT published ORDER BY random() LIMIT $1
+), ranked AS (
+  SELECT o.id, o.entity_id, o.type, o.data, o.metadata, o.version, o.idx, o.created_at,
+         row_number() OVER (PARTITION BY o.entity_id ORDER BY o.version, o.idx) rn
+  FROM %[1]s o JOIN picked p USING (entity_id) WHERE NOT o.published
+)
+SELECT id, entity_id, type, data, metadata, version, idx, created_at
+FROM ranked WHERE rn <= $2 ORDER BY entity_id, version, idx`, r.table)
 
-	if limit > 0 {
-		qb = qb.Limit(uint64(limit))
-	}
-
-	query, args, err := qb.ToSql()
-	if err != nil {
-		return nil, err
-	}
-	rows, err := r.db.Conn(ctx).QueryContext(ctx, query, args...)
+	rows, err := r.db.Conn(ctx).QueryContext(ctx, query, maxEntities, maxEventsPerEntity)
 	if err != nil {
 		return nil, err
 	}
@@ -82,9 +81,11 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]emb
 		var (
 			id, entityID, typ string
 			data, metadata    []byte
+			version           int64
+			idx               int
 			createdAt         time.Time
 		)
-		if err := rows.Scan(&id, &entityID, &typ, &data, &metadata, &createdAt); err != nil {
+		if err := rows.Scan(&id, &entityID, &typ, &data, &metadata, &version, &idx, &createdAt); err != nil {
 			return nil, err
 		}
 		md := ember.Metadata{}
@@ -97,6 +98,8 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]emb
 		es = append(es, ember.EventEnvelope{
 			ID:       id,
 			EntityID: entityID,
+			Version:  uint64(version),
+			Index:    idx,
 			Event: &ember.MarshaledEvent{
 				Type: typ,
 				Data: data,
