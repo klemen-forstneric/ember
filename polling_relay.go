@@ -12,26 +12,29 @@ import (
 
 // PollingRelayConfig
 type PollingRelayConfig struct {
-	IdleInterval time.Duration // idle poll cadence (jittered per replica)
-	BatchSize    int           // events fetched per round
-	LockKey      string        // redis efficiency-lock key
-	Retention    time.Duration // published_at + Retention → expires_at (TTL)
+	IdleInterval        time.Duration // idle poll cadence (jittered per replica)
+	MaxEntitiesPerRound int           // distinct entities sampled per round
+	MaxEventsPerEntity  int           // events drained per entity, per round
+	LockKey             string        // redis efficiency-lock key
+	Retention           time.Duration // published_at + Retention → expires_at (TTL)
 }
 
 const (
-	defaultIdleInterval = 200 * time.Millisecond
-	defaultBatchSize    = 500
-	defaultRetention    = 7 * 24 * time.Hour
+	defaultIdleInterval        = 200 * time.Millisecond
+	defaultMaxEntitiesPerRound = 100
+	defaultMaxEventsPerEntity  = 20
+	defaultRetention           = 7 * 24 * time.Hour
 )
 
 // DefaultPollingRelayConfig returns a PollingRelayConfig with sensible defaults.
 // key must be unique per service and shared by that service's replicas.
 func DefaultPollingRelayConfig(key string) PollingRelayConfig {
 	return PollingRelayConfig{
-		IdleInterval: defaultIdleInterval,
-		BatchSize:    defaultBatchSize,
-		LockKey:      key,
-		Retention:    defaultRetention,
+		IdleInterval:        defaultIdleInterval,
+		MaxEntitiesPerRound: defaultMaxEntitiesPerRound,
+		MaxEventsPerEntity:  defaultMaxEventsPerEntity,
+		LockKey:             key,
+		Retention:           defaultRetention,
 	}
 }
 
@@ -44,8 +47,10 @@ func validateRelayConfig(cfg PollingRelayConfig) error {
 		return fmt.Errorf("%w: LockKey must not be empty", ErrInvalidRelayConfig)
 	case cfg.IdleInterval <= 0:
 		return fmt.Errorf("%w: IdleInterval must be positive", ErrInvalidRelayConfig)
-	case cfg.BatchSize <= 0:
-		return fmt.Errorf("%w: BatchSize must be positive", ErrInvalidRelayConfig)
+	case cfg.MaxEntitiesPerRound <= 0:
+		return fmt.Errorf("%w: MaxEntitiesPerRound must be positive", ErrInvalidRelayConfig)
+	case cfg.MaxEventsPerEntity <= 0:
+		return fmt.Errorf("%w: MaxEventsPerEntity must be positive", ErrInvalidRelayConfig)
 	case cfg.Retention <= 0:
 		return fmt.Errorf("%w: Retention must be positive", ErrInvalidRelayConfig)
 	}
@@ -54,7 +59,7 @@ func validateRelayConfig(cfg PollingRelayConfig) error {
 
 // PollingRelayRepository is the drain side of a table-backed outbox.
 type PollingRelayRepository interface {
-	ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error)
+	ListUnpublished(ctx context.Context, maxEntities, maxEventsPerEntity int) ([]EventEnvelope, error)
 	MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error
 }
 
@@ -89,7 +94,7 @@ func NewPollingRelay(r PollingRelayRepository, s Sink, l Locker, log LoggerCtx, 
 }
 
 func (r *PollingRelay) publish(ctx context.Context) (int, error) {
-	events, err := r.repository.ListUnpublished(ctx, r.cfg.BatchSize)
+	events, err := r.repository.ListUnpublished(ctx, r.cfg.MaxEntitiesPerRound, r.cfg.MaxEventsPerEntity)
 	if err != nil {
 		return 0, err
 	}
@@ -157,7 +162,7 @@ func (r *PollingRelay) tick(ctx context.Context) {
 			r.logger.Error(ctx, "Failed to drain outbox batch", err)
 			return
 		}
-		if published < r.cfg.BatchSize {
+		if published == 0 {
 			return
 		}
 	}

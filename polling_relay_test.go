@@ -33,11 +33,19 @@ func evt(id, entityID string) EventEnvelope {
 
 func testRelayConfig() PollingRelayConfig {
 	return PollingRelayConfig{
-		IdleInterval: time.Millisecond,
-		BatchSize:    10,
-		LockKey:      "outbox:test",
-		Retention:    24 * time.Hour,
+		IdleInterval:        time.Millisecond,
+		MaxEntitiesPerRound: 3,
+		MaxEventsPerEntity:  4,
+		LockKey:             "outbox:test",
+		Retention:           24 * time.Hour,
 	}
+}
+
+func versioned(id, entityID string, version uint64, index int) EventEnvelope {
+	e := evt(id, entityID)
+	e.Version = version
+	e.Index = index
+	return e
 }
 
 type PollingRelaySuite struct {
@@ -63,7 +71,7 @@ func (s *PollingRelaySuite) SetupTest() {
 
 func (s *PollingRelaySuite) TestPublishBatchOneCallPerEntity() {
 	batch := []EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "B")}
-	s.repository.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
+	s.repository.On("ListUnpublished", mock.Anything, 3, 4).Return(batch, nil).Once()
 
 	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[0], batch[1]}).Return(nil).Once()
 	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[2]}).Return(nil).Once()
@@ -79,7 +87,7 @@ func (s *PollingRelaySuite) TestPublishBatchOneCallPerEntity() {
 
 func (s *PollingRelaySuite) TestPublishBatchFailingGroupDoesNotBlockOtherEntities() {
 	batch := []EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "B")}
-	s.repository.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
+	s.repository.On("ListUnpublished", mock.Anything, 3, 4).Return(batch, nil).Once()
 
 	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[0], batch[1]}).
 		Return(errors.New("route fail")).Once()
@@ -97,7 +105,7 @@ func (s *PollingRelaySuite) TestPublishBatchFailingGroupDoesNotBlockOtherEntitie
 
 func (s *PollingRelaySuite) TestPublishBatchFailingGroupMarksNothingInThatGroup() {
 	batch := []EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "A")}
-	s.repository.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
+	s.repository.On("ListUnpublished", mock.Anything, 3, 4).Return(batch, nil).Once()
 	s.sink.On("Publish", mock.Anything, batch).Return(errors.New("broker down")).Once()
 
 	logger := &mockLogger{}
@@ -120,30 +128,58 @@ func (s *PollingRelaySuite) TestTickNotLeaderDoesNothing() {
 
 	s.r.tick(context.Background())
 
-	s.repository.AssertNotCalled(s.T(), "ListUnpublished", mock.Anything, mock.Anything)
+	s.repository.AssertNotCalled(s.T(), "ListUnpublished", mock.Anything, mock.Anything, mock.Anything)
 	s.locker.AssertExpectations(s.T())
 }
 
-func (s *PollingRelaySuite) TestTickDrainsWhileFullBatch() {
+func (s *PollingRelaySuite) TestPublishPreservesRepositoryOrderWithinAGroup() {
+	batch := []EventEnvelope{
+		versioned("e1", "A", 1, 0),
+		versioned("e2", "A", 1, 1),
+		versioned("e3", "A", 2, 0),
+	}
+	s.repository.On("ListUnpublished", mock.Anything, 3, 4).Return(batch, nil).Once()
+	s.sink.On("Publish", mock.Anything, batch).Return(nil).Once()
+	s.repository.On("MarkPublished", mock.Anything, sameIDs("e1", "e2", "e3"), mock.Anything).Return(nil).Once()
+
+	published, err := s.r.publish(context.Background())
+
+	s.Require().NoError(err)
+	s.Equal(3, published)
+	s.repository.AssertExpectations(s.T())
+}
+
+func (s *PollingRelaySuite) TestTickDrainsWhileRoundsMakeProgress() {
 	lock := &mockLock{}
 	s.locker.On("TryLock", mock.Anything, "outbox:test").Return(lock, nil).Once()
 	lock.On("Release", mock.Anything).Return(nil).Once()
 
-	// cfg.BatchSize is 10. First batch: 10 events (all published) → drain again.
-	// Second batch: empty → stop.
-	full := make([]EventEnvelope, 10)
-	for i := range full {
-		full[i] = evt("full", "A")
-	}
-	s.repository.On("ListUnpublished", mock.Anything, 10).Return(full, nil).Once()
-	s.repository.On("ListUnpublished", mock.Anything, 10).Return([]EventEnvelope{}, nil).Once()
-	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil)
+	s.repository.On("ListUnpublished", mock.Anything, 3, 4).
+		Return([]EventEnvelope{versioned("e1", "A", 1, 0)}, nil).Once()
+	s.repository.On("ListUnpublished", mock.Anything, 3, 4).
+		Return([]EventEnvelope{}, nil).Once()
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
 	s.repository.On("MarkPublished", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	s.r.tick(context.Background())
 
 	s.repository.AssertNumberOfCalls(s.T(), "ListUnpublished", 2)
 	lock.AssertExpectations(s.T())
+}
+
+func (s *PollingRelaySuite) TestTickStopsWhenARoundPublishesNothing() {
+	lock := &mockLock{}
+	s.locker.On("TryLock", mock.Anything, "outbox:test").Return(lock, nil).Once()
+	lock.On("Release", mock.Anything).Return(nil).Once()
+
+	batch := []EventEnvelope{versioned("e1", "A", 1, 0)}
+	s.repository.On("ListUnpublished", mock.Anything, 3, 4).Return(batch, nil).Once()
+	s.sink.On("Publish", mock.Anything, batch).Return(errors.New("broker down")).Once()
+
+	s.r.tick(context.Background())
+
+	s.repository.AssertNumberOfCalls(s.T(), "ListUnpublished", 1)
+	s.repository.AssertNotCalled(s.T(), "MarkPublished", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func (s *PollingRelaySuite) TestRunStopsOnContextCancel() {
@@ -188,9 +224,22 @@ func (s *PollingRelaySuite) TestDefaultRelayConfig() {
 	cfg := DefaultPollingRelayConfig("k")
 
 	s.Equal(200*time.Millisecond, cfg.IdleInterval)
-	s.Equal(500, cfg.BatchSize)
+	s.Equal(100, cfg.MaxEntitiesPerRound)
+	s.Equal(20, cfg.MaxEventsPerEntity)
 	s.Equal("k", cfg.LockKey)
 	s.Equal(7*24*time.Hour, cfg.Retention)
+}
+
+func (s *PollingRelaySuite) TestNewRelayRejectsNonPositiveLimits() {
+	cfg := testRelayConfig()
+	cfg.MaxEntitiesPerRound = 0
+	_, err := NewPollingRelay(s.repository, s.sink, s.locker, NopLogger, cfg)
+	s.Require().ErrorIs(err, ErrInvalidRelayConfig)
+
+	cfg = testRelayConfig()
+	cfg.MaxEventsPerEntity = 0
+	_, err = NewPollingRelay(s.repository, s.sink, s.locker, NopLogger, cfg)
+	s.Require().ErrorIs(err, ErrInvalidRelayConfig)
 }
 
 func (s *PollingRelaySuite) TestNewRelayWithDefaultConfigSucceeds() {
@@ -216,9 +265,10 @@ func (s *PollingRelaySuite) TestNewRelayInvalidConfig() {
 	}
 
 	tests := map[string]PollingRelayConfig{
-		"IdleInterval zero": func() PollingRelayConfig { c := valid(); c.IdleInterval = 0; return c }(),
-		"BatchSize zero":    func() PollingRelayConfig { c := valid(); c.BatchSize = 0; return c }(),
-		"Retention zero":    func() PollingRelayConfig { c := valid(); c.Retention = 0; return c }(),
+		"IdleInterval zero":        func() PollingRelayConfig { c := valid(); c.IdleInterval = 0; return c }(),
+		"MaxEntitiesPerRound zero": func() PollingRelayConfig { c := valid(); c.MaxEntitiesPerRound = 0; return c }(),
+		"MaxEventsPerEntity zero":  func() PollingRelayConfig { c := valid(); c.MaxEventsPerEntity = 0; return c }(),
+		"Retention zero":           func() PollingRelayConfig { c := valid(); c.Retention = 0; return c }(),
 	}
 
 	for name, cfg := range tests {
