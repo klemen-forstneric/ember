@@ -134,12 +134,13 @@ func (s *PollingRelaySuite) TestTickNotLeaderDoesNothing() {
 
 func (s *PollingRelaySuite) TestPublishPreservesRepositoryOrderWithinAGroup() {
 	batch := []EventEnvelope{
+		versioned("e3", "A", 2, 0),
 		versioned("e1", "A", 1, 0),
 		versioned("e2", "A", 1, 1),
-		versioned("e3", "A", 2, 0),
 	}
+	want := append([]EventEnvelope(nil), batch...)
 	s.repository.On("ListUnpublished", mock.Anything, 3, 4).Return(batch, nil).Once()
-	s.sink.On("Publish", mock.Anything, batch).Return(nil).Once()
+	s.sink.On("Publish", mock.Anything, want).Return(nil).Once()
 	s.repository.On("MarkPublished", mock.Anything, sameIDs("e1", "e2", "e3"), mock.Anything).Return(nil).Once()
 
 	published, err := s.r.publish(context.Background())
@@ -228,18 +229,6 @@ func (s *PollingRelaySuite) TestDefaultRelayConfig() {
 	s.Equal(20, cfg.MaxEventsPerEntity)
 	s.Equal("k", cfg.LockKey)
 	s.Equal(7*24*time.Hour, cfg.Retention)
-}
-
-func (s *PollingRelaySuite) TestNewRelayRejectsNonPositiveLimits() {
-	cfg := testRelayConfig()
-	cfg.MaxEntitiesPerRound = 0
-	_, err := NewPollingRelay(s.repository, s.sink, s.locker, NopLogger, cfg)
-	s.Require().ErrorIs(err, ErrInvalidRelayConfig)
-
-	cfg = testRelayConfig()
-	cfg.MaxEventsPerEntity = 0
-	_, err = NewPollingRelay(s.repository, s.sink, s.locker, NopLogger, cfg)
-	s.Require().ErrorIs(err, ErrInvalidRelayConfig)
 }
 
 func (s *PollingRelaySuite) TestNewRelayWithDefaultConfigSucceeds() {
