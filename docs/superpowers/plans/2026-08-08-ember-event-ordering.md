@@ -14,7 +14,7 @@
 
 - Module is `github.com/klemen-forstneric/ember`. Work on branch `feat/event-ordering`.
 - Tests use `testify/suite` with `SetupTest`, and `testify/mock` doubles. Mocks and fakes are unexported and live in `*_test.go`. New tests go in the canonical test file for the unit under test.
-- Comments: none, except `// TypeName` labels above exported types and a terse one-liner where the code is genuinely non-obvious. Rationale belongs in the commit message.
+- Comments: `// TypeName` labels above exported types, and nothing else. The explanatory comments inside this plan's code snippets are there to explain the plan to a reader — strip them when you write the code. Rationale belongs in the commit message, not the source. This applies to lines you add or modify; leave pre-existing comments in untouched code alone.
 - The storage field is `idx` on both backends. The Go envelope field is `Index`. Do not "unify" them.
 - Version 0 is reserved for the unordered `Publisher.Publish` lane. Ordered events always have version >= 1.
 - `go build ./... && go test ./...` must pass at the end of every task. Mongo integration tests skip when mongo is unavailable; that is a pass, not a failure.
