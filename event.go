@@ -27,6 +27,8 @@ type EventRepository interface {
 type EventEnvelope struct {
 	ID        string
 	EntityID  string
+	Version   uint64
+	Index     int
 	Event     *MarshaledEvent
 	Metadata  Metadata
 	Timestamp time.Time
@@ -62,7 +64,13 @@ type envelopeBuilder struct {
 	marshaler EventMarshaler
 }
 
-func (b envelopeBuilder) build(ctx context.Context, events ...Event) ([]EventEnvelope, error) {
+type staged struct {
+	event   Event
+	version uint64
+	index   int
+}
+
+func (b envelopeBuilder) build(ctx context.Context, events []staged) ([]EventEnvelope, error) {
 	metadata, err := b.metadata.Get(ctx)
 	if err != nil {
 		return nil, err
@@ -70,13 +78,15 @@ func (b envelopeBuilder) build(ctx context.Context, events ...Event) ([]EventEnv
 
 	envelopes := make([]EventEnvelope, 0, len(events))
 	for _, e := range events {
-		marshaled, err := b.marshaler.Marshal(ctx, e)
+		marshaled, err := b.marshaler.Marshal(ctx, e.event)
 		if err != nil {
 			return nil, err
 		}
 		envelopes = append(envelopes, EventEnvelope{
 			ID:        b.ider.ID(),
-			EntityID:  e.EntityID(),
+			EntityID:  e.event.EntityID(),
+			Version:   e.version,
+			Index:     e.index,
 			Event:     marshaled,
 			Metadata:  metadata,
 			Timestamp: time.Now().UTC(),

@@ -99,7 +99,7 @@ func (s *PublisherSuite) TestAtLeastOnceStageDefersNothing() {
 	s.marshaler.On("Marshal", mock.Anything, evt).Return(&MarshaledEvent{Type: "Created"}, nil)
 	s.repo.On("Save", mock.Anything, mock.Anything).Return(nil)
 
-	d, err := s.atLeastOncePublisher().stage(s.ctx, evt)
+	d, err := s.atLeastOncePublisher().stage(s.ctx, []staged{{event: evt, version: 1}})
 
 	s.Require().NoError(err)
 	s.Nil(d, "the Relay delivers; nothing waits on commit")
@@ -133,7 +133,7 @@ func (s *PublisherSuite) TestBestEffortStageDefersDelivery() {
 	evt := fakeEvent{entityID: "A", typ: "Created"}
 	s.marshaler.On("Marshal", mock.Anything, evt).Return(&MarshaledEvent{Type: "Created"}, nil)
 
-	d, err := s.bestEffortPublisher().stage(s.ctx, evt)
+	d, err := s.bestEffortPublisher().stage(s.ctx, []staged{{event: evt, version: 1}})
 
 	s.Require().NoError(err)
 	s.Require().NotNil(d, "delivery must wait for commit")
@@ -141,6 +141,23 @@ func (s *PublisherSuite) TestBestEffortStageDefersDelivery() {
 
 	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
 	s.Require().NoError(d(s.ctx))
+}
+
+func (s *PublisherSuite) TestPublishStampsUnorderedLane() {
+	evt1 := fakeEvent{entityID: "A", typ: "Created"}
+	evt2 := fakeEvent{entityID: "A", typ: "Updated"}
+	s.marshaler.On("Marshal", mock.Anything, mock.Anything).
+		Return(&MarshaledEvent{Type: "T", Data: []byte(`{}`)}, nil)
+
+	var got []EventEnvelope
+	s.repo.On("Save", mock.Anything, mock.Anything).Return(nil).Once().
+		Run(func(args mock.Arguments) { got = args.Get(1).([]EventEnvelope) })
+
+	s.Require().NoError(s.atLeastOncePublisher().Publish(s.ctx, evt1, evt2))
+
+	s.Require().Len(got, 2)
+	s.Equal([]uint64{0, 0}, []uint64{got[0].Version, got[1].Version})
+	s.Equal([]int{0, 1}, []int{got[0].Index, got[1].Index})
 }
 
 func (s *PublisherSuite) TestPublishNoEventsIsNoop() {
