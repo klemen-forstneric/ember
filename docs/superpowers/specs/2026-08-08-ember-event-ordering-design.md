@@ -290,8 +290,8 @@ inside a transaction — already exactly the invariant this work buys. The one c
 losslessly. Nothing reads them on that path, but skipping them would make
 `decode(encode(e)) != e`.
 
-`embertest` doubles and the mongo bench fixtures (`mongo/bench_test.go:106`) carry `Seq`
-and need the same swap.
+The mongo bench fixtures (`mongo/bench_test.go:106`) carry `Seq` and need the same swap.
+`embertest.Recorder` is a `Sink` and is unaffected.
 
 ## Rollout
 
