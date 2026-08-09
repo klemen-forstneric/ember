@@ -98,35 +98,33 @@ stopped.
 
 ## Call-site changes
 
-`PollingRelayConfig.BatchSize` is gone, replaced by `MaxEntitiesPerRound` and
-`MaxEventsPerEntity`. Services constructing config via
-`ember.DefaultPollingRelayConfig(key)` need no change. Services setting
-`BatchSize` explicitly must set both new fields.
+`PollingRelayConfig` takes a single `BatchSize int` — events fetched per
+round. Services constructing config via `ember.DefaultPollingRelayConfig(key)`
+need no change (default `500`).
 
-Any service with a custom `PollingRelayRepository` must implement the new
-`ListUnpublished(ctx, maxEntities, maxEventsPerEntity)` signature — and that
-signature carries a contract the compiler cannot check:
+Any service with a custom `PollingRelayRepository` must implement
+`ListUnpublished(ctx, limit)`, and that signature carries a contract the
+compiler cannot check:
 
-- Pick up to `maxEntities` distinct `entity_id`s **at random** from the
-  unpublished set.
-- Return up to `maxEventsPerEntity` events for each of those entities.
-- The result is flat, grouped by entity, version-ordered within each entity.
-  Cross-entity order is unspecified — the relay buckets by `EntityID` before
-  publishing, so it never observes it.
+- Return up to `limit` unpublished events, flat, ordered by `(entity_id,
+  version, idx)`.
 - Ordering is the repository's job. The relay does not re-sort what
-  `ListUnpublished` returns.
+  `ListUnpublished` returns — it buckets the result by `EntityID` and
+  publishes each bucket in the order it arrived, so an unsorted or
+  wrongly-sorted result reaches the sink unsorted.
 
-Two implementations compile, satisfy the interface, and pass a naive test
-suite, but both starve the outbox under a real backlog:
+One implementation compiles, satisfies the interface, and passes a naive test
+suite, but starves the outbox under a real backlog:
 
-1. `ORDER BY version, idx LIMIT maxEntities*maxEventsPerEntity` — a global sort
-   with no entity sampling first. This reintroduces the starvation the whole
-   change exists to remove: a long-lived entity at version 8000 sorts behind
-   every version-1 row from every other entity and never drains.
-2. `SELECT DISTINCT entity_id ... LIMIT maxEntities` with no `ORDER BY`. This
-   returns entities in stable index-scan order, so every round picks the same
-   entities and starves the rest. "Unordered" is not "random" — a scan's
-   default order is a query-planner artifact, not a shuffle.
+`ORDER BY version, idx LIMIT limit` — sorting by version first, without
+`entity_id` ahead of it. This reintroduces the starvation the whole change
+exists to remove: a long-lived entity at version 8000 sorts behind every
+version-1 row from every other entity, and since new entities keep arriving
+at version 1, it never reaches the front of that sort and never drains.
+`entity_id` must sort first — `(entity_id, version, idx)` bounds the damage to
+low-`entity_id` entities winning the window each round, which only starves a
+given entity under sustained saturation (earlier-sorting entities producing
+faster than the relay drains), not in an otherwise healthy backlog.
 
 An entity emitting an event whose `EntityID()` is not its own `ID()` now fails
 `Save` with `ember.ErrForeignEvent`. This fires on a runtime comparison, not a

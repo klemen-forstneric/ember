@@ -94,23 +94,32 @@ store it. `ReceivedEvent` does not gain it and no transport forwards it. Exposin
 let consumers reject stale redeliveries — the standard companion to per-entity ordering —
 but no consumer needs that today, and it is an API surface that cannot be withdrawn.
 
-**Fetch order is decoupled from publish order.** `ORDER BY version, index` as a *global*
-sort is correct — within an entity v1 always precedes v2, so any prefix of that sort is a
-valid prefix per entity — but it starves. An entity at version 8000 sorts behind every
-version-1 event in the outbox, and under a backlog, freshly created entities keep arriving
-at v1 and keep jumping the queue. The high-version entity is not merely delayed; it can
-starve indefinitely. That bites exactly the long-lived, high-churn entities that matter
-most.
+**Fetch order sorts by `(entity_id, version, idx)`, not `(version, idx)` alone.**
+`ORDER BY version, idx` as a *global* sort is correct — within an entity v1 always precedes
+v2, so any prefix of that sort is a valid prefix per entity — but it starves. An entity at
+version 8000 sorts behind every version-1 event in the outbox, and under a backlog, freshly
+created entities keep arriving at v1 and keep jumping the queue. The high-version entity is
+not merely delayed; it can starve indefinitely, and arrivals at v1 are unbounded so it never
+reaches the front. That bites exactly the long-lived, high-churn entities that matter most,
+and it is the exact failure the original two-phase random-sample design existed to prevent.
 
-So the drain is two-phase: sample entities, then drain each in version order. Selection is
-**random**, which keeps the clock out of the drain path entirely. Oldest-first by
-`created_at` is equally correct here — two-phase cannot cut between v1 and v2 of one
-entity, so clock skew in *selection* only mis-prioritizes, never mis-orders — and remains
-a swappable policy. Random simply also drops the index and the last clock reference.
+Putting `entity_id` first removes that failure mode without a second phase. A single query,
+sorted `(entity_id, version, idx)` with one `LIMIT`, is a prefix of a correctly-sorted set:
+per entity, that prefix is a valid version-ordered run, because sorting by `entity_id` first
+cannot interleave one entity's versions with another's out of order. The trade this makes
+honestly: low-`entity_id` entities win the window every round, and an entity can still starve
+if earlier-sorting entities keep producing faster than the relay drains them. But that
+requires *sustained saturation* — the system already losing regardless of drain strategy —
+not merely a healthy backlog with new entities arriving, which is what broke the global
+`(version, idx)` sort. As a sorted prefix's events publish and get marked, they leave the
+unpublished set and the window advances past them; the starvation is bounded and self-healing
+rather than the original failure mode's unbounded, permanent kind.
 
-Note that "unordered" is not "random": `SELECT DISTINCT entity_id ... LIMIT K` with no
-`ORDER BY` returns stable index-scan order, the same K entities every round, which
-reinvents starvation. The randomization must be explicit.
+A two-phase design (mongo: `$group`/`$sample` for entity ids, then one `find` per sampled
+entity; postgres: a `picked`/`ranked` CTE with `row_number()` per entity) was built first to
+avoid this trade entirely via random entity selection. It was reverted: it costs 1 + K round
+trips per round on mongo and a window-function CTE on postgres, and the repo owner judged
+that cost not worth buying out a failure mode that only shows up under sustained saturation.
 
 ## Design
 
@@ -169,78 +178,61 @@ already correct. Its envelopes carry the version unused.
 
 ### The drain
 
-`PollingRelayRepository.ListUnpublished(ctx, limit)` cannot express two-phase selection:
+`PollingRelayRepository.ListUnpublished(ctx, limit)` is one query, one round trip:
 
 ```go
 type PollingRelayRepository interface {
-	ListUnpublished(ctx context.Context, maxEntities, maxEventsPerEntity int) ([]EventEnvelope, error)
+	ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error)
 	MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error
 }
 ```
 
-Contract: pick up to `maxEntities` distinct `entity_id`s **at random** from the unpublished
-set, return up to `maxEventsPerEntity` events for each, flat, grouped by entity and
-version-ordered within each entity; cross-entity order is unspecified. Ordering is the
-repository's job — the relay buckets by `EntityID` before publishing, so cross-entity order
-is irrelevant to it, which is why the weaker guarantee is sufficient; the relay groups while
-preserving arrival order and does not re-sort.
+Contract: return up to `limit` unpublished events, flat, ordered by `(entity_id, version,
+idx)`. Ordering is the repository's job — the relay buckets by `EntityID` before publishing
+and does not re-sort, so it only ever observes each entity's slice, which is guaranteed a
+valid version-ordered prefix by the sort itself.
 
-Postgres, one statement:
+Postgres, one statement, built with squirrel like `Save` and `MarkPublished`:
 
 ```sql
-WITH picked AS (
-  SELECT DISTINCT entity_id FROM outbox WHERE NOT published ORDER BY random() LIMIT $1
-), ranked AS (
-  SELECT o.*, row_number() OVER (PARTITION BY o.entity_id ORDER BY o.version, o.idx) rn
-  FROM outbox o JOIN picked p USING (entity_id) WHERE NOT o.published
-)
-SELECT * FROM ranked WHERE rn <= $2 ORDER BY entity_id, version, idx;
+SELECT id, entity_id, type, data, metadata, version, idx, created_at
+FROM outbox WHERE NOT published
+ORDER BY entity_id, version, idx
+LIMIT $1;
 ```
 
-Mongo takes 1 + K round trips — `$match` + `$group` + `$sample` for the keys, then one
-`find` per sampled entity, filtered on that `entity_id`, sorted `(version, idx)`, limited to
-`maxEventsPerEntity`. A single `find` across all keys with a shared `maxEntities ×
-maxEventsPerEntity` limit was tried first, but the shared budget let one early-sorting,
-backlog-heavy entity starve the rest — per-entity fairness is the property this whole
-change exists to deliver, so each entity gets its own capped query instead. Avoiding
-`$setWindowFields` is deliberate: DocumentDB compatibility is worth the extra queries.
+Mongo is a single `find`: filter `{published: false}`, sort `{entity_id: 1, version: 1, idx:
+1}`, limit `limit`. Both backends dropped the two-phase machinery this replaced — mongo's
+`$group`/`$sample` entity sample plus one `find` per sampled entity, and postgres's
+`picked`/`ranked` CTE with a `row_number()` window function partitioned per entity. Both
+existed solely to buy random entity selection, which bought out the starvation trade this
+design now accepts (see the "Fetch order" decision above) at a cost of 1 + K round trips per
+round on mongo and a window function on postgres. The repo owner judged that not worth it.
 
 ### Config
 
 ```go
 type PollingRelayConfig struct {
-	IdleInterval        time.Duration
-	MaxEntitiesPerRound int
-	MaxEventsPerEntity  int
-	LockKey             string
-	Retention           time.Duration
+	IdleInterval time.Duration
+	BatchSize    int
+	LockKey      string
+	Retention    time.Duration
 }
 ```
 
-Defaults ~`100` / `20`. Both validate `> 0` in `validateRelayConfig`. `IdleInterval`,
-`LockKey`, and `Retention` keep their names — none is a ceiling, so a `Max` prefix would
-misdescribe them, and renaming them widens the break for no gain.
-
-`BatchSize` is gone. Every service constructs via `DefaultPollingRelayConfig(key)`, so the
-call sites are unaffected in practice.
+Back to the original single knob: `BatchSize` replaces `MaxEntitiesPerRound` and
+`MaxEventsPerEntity`, default `500`, validated `> 0` in `validateRelayConfig` like the others.
+`IdleInterval`, `LockKey`, and `Retention` are unaffected.
 
 ### Continuation
 
-`polling_relay.go:160`'s `if published < r.cfg.BatchSize { return }` is meaningless once a
-round is entity-scoped — a short round means "these entities had few events", not "the
-outbox is empty". It becomes a progress test:
-
-```go
-if published == 0 {
-	return
-}
-```
-
-Strictly better: it drains until nothing moves, and it cannot spin when every group's
-`sink.Publish` fails, because a round that publishes nothing exits. Per-group failure
-handling at `polling_relay.go:104` is unchanged — `continue`, leave unpublished, retry next
-round. With random sampling a poison group no longer reliably reappears next round, so it
-stops shadowing its neighbours.
+`published == 0` (`polling_relay.go`'s `tick`) is still the right progress test with a flat,
+single-query fetch — it drains until a round moves nothing, and it cannot spin when every
+group's `sink.Publish` fails, because that round publishes zero and exits. Per-group failure
+handling in `publish` is unchanged — `continue`, leave unpublished, retry next round. A
+failing group is refetched at the front of the next round (lowest `entity_id`), so once the
+batch is nothing but failing rows, the round publishes zero and `tick` exits rather than
+spinning on the same poison group forever.
 
 ### Storage
 
@@ -269,11 +261,9 @@ Options: options.Index().SetPartialFilterExpression(bson.D{{Key: "published", Va
 ```
 
 Partial on `published: false` for the reason it exists today — the index tracks the
-backlog, not the retained history. It serves phase 2 directly and keeps phase 1's `$group`
-scanning backlog-sized data. `$sample` after `$group` runs over the grouped keys in memory
-rather than via mongo's optimized random-cursor path, so phase 1 costs one pass over the
-distinct unpublished entity ids — bounded by backlog size, near zero in steady state. The
-TTL index on `expires_at` is untouched.
+backlog, not the retained history. It serves `ListUnpublished`'s find directly: filter and
+sort both hit the index, so the query is an index scan bounded by `limit`, not a scan of the
+backlog. The TTL index on `expires_at` is untouched.
 
 Postgres drops `seq bigint` for `version bigint not null` and `idx int not null`, with a
 mirroring partial index:
@@ -300,10 +290,10 @@ The mongo bench fixtures (`mongo/bench_test.go:106`) carry `Seq` and need the sa
 ## Rollout
 
 Breaking: `PollingRelayRepository`'s signature (the real external break — anyone with a
-custom outbox implements it), `PollingRelayConfig` losing `BatchSize`, both outbox schemas,
-and foreign-entity events beginning to error. `EventEnvelope`'s two new fields are additive
-but visible to `Sink` implementers. `stage`/`build`/`staged` are unexported and do not
-count.
+custom outbox implements it), `PollingRelayConfig`'s shape (`BatchSize` again, single-knob),
+both outbox schemas, and foreign-entity events beginning to error. `EventEnvelope`'s two new
+fields are additive but visible to `Sink` implementers. `stage`/`build`/`staged` are
+unexported and do not count.
 
 **Per-service, not fleet-wide.** Each service owns its own outbox collection or table and
 bumps ember on its own schedule. No coordinated cutover, which is what makes a drain
@@ -360,25 +350,25 @@ each unit, doubles from `embertest`.
   others.
 
 `mongo/event_repository_test.go` (integration, real mongo, dialing once per `40bc5d3`) —
-where the two-phase query is proven, because it is real-datastore behavior and a fake would
-only re-assert our own Go code.
-- Seed 3 entities x 5 events, `MaxEntitiesPerRound=2`, `MaxEventsPerEntity=3` → exactly 2
-  distinct entities, <=3 events each, each a version-prefix from that entity's lowest
-  unpublished version.
+where the sorted find is proven, because it is real-datastore behavior and a fake would only
+re-assert our own Go code.
+- One entity's events ordered by version then idx.
 - **The regression test for the actual bug:** seed one entity's events with `created_at`
   going backwards, several sharing an identical timestamp, and assert the drain order is
   still strict version order. Fails under `seq = UnixNano`; passes trivially under
   `(version, idx)` because the clock is not in the path.
-- Random sampling: over N rounds every seeded entity appears at least once. Coverage, not
-  distribution — asserting a distribution invites flake for no information.
+- Several entities seeded out of order: the flat result is ordered by `(entity_id, version,
+  idx)`, and each entity's run within it is a version-ordered prefix.
+- `ListUnpublished` respects `limit`; `MarkPublished` drops an event out of the pending set.
 
-`postgres/event_repository_test.go` — sqlmock for the CTE query shape, args, and scan-back
-mapping. The repo is dormant; real query behavior gets proven when a service adopts it.
+`postgres/event_repository_test.go` — sqlmock for the plain `SELECT ... ORDER BY entity_id,
+version, idx LIMIT $n` query shape, args, and scan-back mapping. The repo is dormant; real
+query behavior gets proven when a service adopts it.
 
 `postgres/wal/message_test.go` — `decode(encode(e)) == e` including `version`/`idx`.
 
-Not tested: mongo's `$sample`, mongo's sort, postgres window functions. Those are the
-datastore's tests.
+Not tested: mongo's sort, postgres's `ORDER BY`/`LIMIT` execution. Those are the datastore's
+tests.
 
 ## Out of scope
 
