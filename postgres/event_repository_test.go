@@ -21,6 +21,22 @@ func env(id string, ts time.Time) ember.EventEnvelope {
 	}
 }
 
+func versioned(id, entityID string, version uint64, index int, ts time.Time) ember.EventEnvelope {
+	e := env(id, ts)
+	e.EntityID = entityID
+	e.Version = version
+	e.Index = index
+	return e
+}
+
+func ids(envs []ember.EventEnvelope) []string {
+	out := make([]string, len(envs))
+	for i, e := range envs {
+		out[i] = e.ID
+	}
+	return out
+}
+
 func TestEventSaveInsertsUnpublished(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)

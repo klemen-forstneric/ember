@@ -1,13 +1,17 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
+
+	"github.com/klemen-forstneric/ember"
 )
 
 func testConnString() string {
@@ -31,9 +35,9 @@ func connectTestPostgres(t *testing.T) *sql.DB {
 	return db
 }
 
-func TestListUnpublishedQueryParses(t *testing.T) {
+func TestListUnpublishedAgainstPostgres(t *testing.T) {
 	pool := connectTestPostgres(t)
-	table := "ember_list_unpublished_parse_test"
+	table := "ember_list_unpublished_integration_test"
 
 	_, err := pool.Exec(fmt.Sprintf(`DROP TABLE IF EXISTS %s`, table))
 	require.NoError(t, err)
@@ -44,10 +48,20 @@ func TestListUnpublishedQueryParses(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = pool.Exec(fmt.Sprintf(`DROP TABLE IF EXISTS %s`, table)) })
 
-	query, _, err := listUnpublishedQuery(table, 10)
-	require.NoError(t, err)
+	ctx := context.Background()
+	repo := NewEventRepository(NewDB(pool), table)
+	ts := time.Unix(1_700_000_000, 0).UTC()
+	require.NoError(t, repo.Save(ctx, []ember.EventEnvelope{
+		versioned("b-1", "b", 1, 0, ts),
+		versioned("a-2", "a", 2, 0, ts),
+		versioned("a-1", "a", 1, 0, ts),
+	}))
 
-	stmt, err := pool.Prepare(query)
+	got, err := repo.ListUnpublished(ctx, 10)
 	require.NoError(t, err)
-	require.NoError(t, stmt.Close())
+	require.Equal(t, []string{"a-1", "a-2", "b-1"}, ids(got),
+		"ordered by entity_id, then version within each entity")
+	require.Equal(t, uint64(1), got[0].Version)
+	require.Equal(t, "c-a-1", got[0].Metadata[ember.MetadataKey("corr")])
+	require.Equal(t, []byte(`{"k": "v"}`), got[0].Event.Data)
 }

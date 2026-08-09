@@ -57,19 +57,16 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 	return err
 }
 
-func listUnpublishedQuery(table string, limit int) (string, []interface{}, error) {
+func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]ember.EventEnvelope, error) {
 	qb := psql.Select("id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at").
-		From(table).
+		From(r.table).
 		Where("NOT published").
 		OrderBy("entity_id", "version", "idx")
 	if limit > 0 {
 		qb = qb.Limit(uint64(limit))
 	}
-	return qb.ToSql()
-}
 
-func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]ember.EventEnvelope, error) {
-	query, args, err := listUnpublishedQuery(r.table, limit)
+	query, args, err := qb.ToSql()
 	if err != nil {
 		return nil, err
 	}
