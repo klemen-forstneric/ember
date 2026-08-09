@@ -76,9 +76,9 @@ func (s *EventRepositorySuite) TestListUnpublishedIgnoresTheClock() {
 	ctx := context.Background()
 	base := time.Unix(1_700_000_000, 0).UTC()
 	s.Require().NoError(s.repo.Save(ctx, []ember.EventEnvelope{
-		versioned("e1", "A", 1, 0, base.Add(3*time.Second)),
 		versioned("e2", "A", 2, 0, base),
 		versioned("e3", "A", 3, 0, base),
+		versioned("e1", "A", 1, 0, base.Add(3*time.Second)),
 	}))
 
 	got, err := s.repo.ListUnpublished(ctx, 10, 10)

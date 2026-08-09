@@ -127,7 +127,7 @@ func (r *EventRepository) sampleEntities(ctx context.Context, n int) ([]string, 
 		{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$entity_id"}}}},
 		{{Key: "$sample", Value: bson.D{{Key: "size", Value: n}}}},
 	}
-	cur, err := r.collection.Aggregate(ctx, pipeline)
+	cur, err := r.collection.Aggregate(ctx, pipeline, options.Aggregate().SetAllowDiskUse(true))
 	if err != nil {
 		return nil, err
 	}
