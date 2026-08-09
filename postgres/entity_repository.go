@@ -100,13 +100,8 @@ func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter,
 	if pred != nil {
 		qb = qb.Where(pred) // multiple Where clauses are AND-ed together
 	}
-	if s.Path != "" {
-		col, _ := column(s.Path)
-		dir := "ASC"
-		if s.Direction == ember.Descending {
-			dir = "DESC"
-		}
-		qb = qb.OrderBy(col + " " + dir)
+	if clauses := orderBy(s); len(clauses) > 0 {
+		qb = qb.OrderBy(clauses...)
 	}
 
 	query, args, err := qb.ToSql()
