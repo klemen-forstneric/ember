@@ -2,6 +2,7 @@ package mongo
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -67,15 +68,17 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 }
 
 func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]ember.EventEnvelope, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("%w: got %d", ember.ErrInvalidLimit, limit)
+	}
+
 	opts := options.Find().
 		SetSort(bson.D{
 			{Key: "entity_id", Value: sortAscending},
 			{Key: "version", Value: sortAscending},
 			{Key: "idx", Value: sortAscending},
-		})
-	if limit > 0 {
-		opts.SetLimit(int64(limit))
-	}
+		}).
+		SetLimit(int64(limit))
 	filter := bson.D{{Key: "published", Value: false}}
 
 	cur, err := r.collection.Find(ctx, filter, opts)

@@ -52,6 +52,9 @@ func validateRelayConfig(cfg PollingRelayConfig) error {
 	return nil
 }
 
+// ErrInvalidLimit is returned by ListUnpublished when limit is not positive.
+var ErrInvalidLimit = errors.New("ember: limit must be positive")
+
 // PollingRelayRepository is the drain side of a table-backed outbox.
 type PollingRelayRepository interface {
 	ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error)

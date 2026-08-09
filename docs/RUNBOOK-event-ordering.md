@@ -108,6 +108,9 @@ compiler cannot check:
 
 - Return up to `limit` unpublished events, flat, ordered by `(entity_id,
   version, idx)`.
+- Reject a non-positive `limit` with `ember.ErrInvalidLimit`. The relay always
+  passes a validated `BatchSize`, so a zero only arrives from a direct caller,
+  and an unlimited fetch would load the whole backlog into memory.
 - Ordering is the repository's job. The relay does not re-sort what
   `ListUnpublished` returns — it buckets the result by `EntityID` and
   publishes each bucket in the order it arrived, so an unsorted or

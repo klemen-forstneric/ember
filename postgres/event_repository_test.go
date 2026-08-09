@@ -93,20 +93,18 @@ func TestEventListUnpublishedMapsRows(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestEventListUnpublishedNoLimitOmitsLimitClause(t *testing.T) {
+func TestEventListUnpublishedRejectsNonPositiveLimit(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at"})
-	mock.ExpectQuery("SELECT id, entity_id, type, data, metadata, version, idx, created_at FROM events " +
-		"WHERE NOT published ORDER BY entity_id, version ASC, idx ASC$").
-		WillReturnRows(rows)
-
 	repo := NewEventRepository(NewDB(db), "events")
-	_, err = repo.ListUnpublished(context.Background(), 0)
 
-	require.NoError(t, err)
+	for _, limit := range []int{0, -1} {
+		_, err = repo.ListUnpublished(context.Background(), limit)
+		require.ErrorIs(t, err, ember.ErrInvalidLimit)
+	}
+
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

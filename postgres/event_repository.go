@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
@@ -58,13 +59,15 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 }
 
 func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]ember.EventEnvelope, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("%w: got %d", ember.ErrInvalidLimit, limit)
+	}
+
 	qb := psql.Select("id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at").
 		From(r.table).
 		Where("NOT published").
-		OrderBy("entity_id", "version ASC", "idx ASC")
-	if limit > 0 {
-		qb = qb.Limit(uint64(limit))
-	}
+		OrderBy("entity_id", "version ASC", "idx ASC").
+		Limit(uint64(limit))
 
 	query, args, err := qb.ToSql()
 	if err != nil {

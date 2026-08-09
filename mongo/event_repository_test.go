@@ -51,6 +51,13 @@ func versioned(id, entityID string, version uint64, index int, ts time.Time) emb
 	return e
 }
 
+func (s *EventRepositorySuite) TestListUnpublishedRejectsNonPositiveLimit() {
+	for _, limit := range []int{0, -1} {
+		_, err := s.repo.ListUnpublished(context.Background(), limit)
+		s.Require().ErrorIs(err, ember.ErrInvalidLimit)
+	}
+}
+
 func (s *EventRepositorySuite) TestListUnpublishedOrdersByVersionThenIndex() {
 	ctx := context.Background()
 	base := time.Unix(1_700_000_000, 0).UTC()

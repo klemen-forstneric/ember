@@ -192,6 +192,13 @@ idx)`. Ordering is the repository's job — the relay buckets by `EntityID` befo
 and does not re-sort, so it only ever observes each entity's slice, which is guaranteed a
 valid version-ordered prefix by the sort itself.
 
+A non-positive `limit` is `ErrInvalidLimit`, not an unlimited fetch. The relay always
+passes a `BatchSize` that `validateRelayConfig` has already rejected unless positive, so
+zero can only arrive from a direct caller — and there it would load the entire backlog into
+memory. Mongo makes that failure especially quiet, since `SetLimit(0)` also means
+unlimited; omitting the call and passing zero are the same thing, so neither can be the
+signal.
+
 Postgres, one statement, built with squirrel like `Save` and `MarkPublished`:
 
 ```sql

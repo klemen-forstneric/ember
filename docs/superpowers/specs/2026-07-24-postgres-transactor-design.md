@@ -107,7 +107,7 @@ Table columns (caller owns DDL):
 | `expires_at`  | timestamptz null |                                      |
 
 - `Save(ctx, envelopes)`: no-op on empty; one multi-row `INSERT` (`published=false`), through the ctx querier so it joins the entity's tx. `data`/`metadata` marshaled to JSON for the jsonb columns.
-- `ListUnpublished(ctx, limit)`: returns up to `limit` unpublished events, flat, ordered by `(entity_id, version, idx)` — a plain `SELECT ... WHERE NOT published ORDER BY entity_id, version, idx LIMIT $n`.
+- `ListUnpublished(ctx, limit)`: returns up to `limit` unpublished events, flat, ordered by `(entity_id, version, idx)` — a plain `SELECT ... WHERE NOT published ORDER BY entity_id, version, idx LIMIT $n`. A non-positive `limit` is `ember.ErrInvalidLimit`, not an unlimited fetch.
 
 ```sql
 CREATE INDEX outbox_pending ON outbox (entity_id, version, idx) WHERE NOT published;
