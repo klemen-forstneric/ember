@@ -44,7 +44,7 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 			metadata,
 			int64(e.Version),
 			e.Index,
-			e.Timestamp.UTC(),
+			e.Timestamp,
 			false,
 		)
 	}
