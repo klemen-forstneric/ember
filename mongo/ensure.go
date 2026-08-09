@@ -38,16 +38,16 @@ func EnsureOutbox(ctx context.Context, c *mongo.Collection) error {
 	models := []mongo.IndexModel{
 		{
 			Keys: bson.D{
-				{Key: "entity_id", Value: 1},
-				{Key: "version", Value: 1},
-				{Key: "idx", Value: 1},
+				{Key: "entity_id", Value: sortAscending},
+				{Key: "version", Value: sortAscending},
+				{Key: "idx", Value: sortAscending},
 			},
 			Options: options.Index().
 				SetPartialFilterExpression(bson.D{{Key: "published", Value: false}}),
 		},
 		{
 			// TTL: mongo deletes a published doc once expires_at passes.
-			Keys:    bson.D{{Key: "expires_at", Value: 1}},
+			Keys:    bson.D{{Key: "expires_at", Value: sortAscending}},
 			Options: options.Index().SetExpireAfterSeconds(0),
 		},
 	}
@@ -69,7 +69,10 @@ func EnsureEntities(ctx context.Context, c *mongo.Collection) error {
 	}
 
 	_, err := c.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "type", Value: 1}, {Key: "entity_id", Value: 1}},
+		Keys: bson.D{
+			{Key: "type", Value: sortAscending},
+			{Key: "entity_id", Value: sortAscending},
+		},
 		Options: options.Index().SetUnique(true),
 	})
 	return err
