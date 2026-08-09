@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -185,7 +186,7 @@ func TestListPagingKeysetAcrossTie(t *testing.T) {
 	sort := ember.Asc("n").Numeric()
 	var seen []string
 	page := ember.Limit(2)
-	for {
+	for i := 0; i < 5; i++ {
 		got, err := repo.List(ctx, "fake", nil, sort, page)
 		require.NoError(t, err)
 		if len(got) == 0 {
@@ -206,6 +207,29 @@ func TestListPagingKeysetAcrossTie(t *testing.T) {
 	require.Equal(t, []string{"idA", "idB", "idC", "idD"}, seen)
 }
 
+func TestListPagingUnsortedDescendingKeysetWalksForward(t *testing.T) {
+	col := connectTestMongo(t)
+	ctx := context.Background()
+
+	_, err := col.InsertMany(ctx, []interface{}{
+		makeNumEntity(1, "id1"),
+		makeNumEntity(2, "id2"),
+		makeNumEntity(3, "id3"),
+	})
+	require.NoError(t, err)
+
+	repo, err := NewEntityRepository(ctx, col)
+	require.NoError(t, err)
+
+	first, err := repo.List(ctx, "fake", nil, ember.Desc(""), ember.Limit(2))
+	require.NoError(t, err)
+	require.Equal(t, []string{"id1", "id2"}, []string{first[0].ID, first[1].ID})
+
+	second, err := repo.List(ctx, "fake", nil, ember.Desc(""), ember.Limit(2).After(nil, first[1].ID))
+	require.NoError(t, err)
+	require.Equal(t, []string{"id3"}, []string{second[0].ID})
+}
+
 func TestListPagingSortedCursorNeedsValue(t *testing.T) {
 	col := connectTestMongo(t)
 	ctx := context.Background()
@@ -214,5 +238,16 @@ func TestListPagingSortedCursorNeedsValue(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = repo.List(ctx, "fake", nil, ember.Asc("n").Numeric(), ember.Limit(2).After(nil, "idA"))
+	require.ErrorIs(t, err, ember.ErrInvalidCursor)
+}
+
+func TestListPagingCursorValueInvalidWrapsErrInvalidCursor(t *testing.T) {
+	col := connectTestMongo(t)
+	ctx := context.Background()
+
+	repo, err := NewEntityRepository(ctx, col)
+	require.NoError(t, err)
+
+	_, err = repo.List(ctx, "fake", nil, ember.Asc("n"), ember.Limit(2).After(time.Duration(1), "idA"))
 	require.ErrorIs(t, err, ember.ErrInvalidCursor)
 }

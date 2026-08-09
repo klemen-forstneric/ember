@@ -32,15 +32,16 @@ func sortDoc(s ember.Sort, paged bool) bson.D {
 }
 
 func seekPredicate(s ember.Sort, c ember.Cursor) (bson.D, error) {
+	if s.Path == "" {
+		return bson.D{{Key: "entity_id", Value: bson.D{{Key: "$gt", Value: c.ID}}}}, nil
+	}
+
 	op := "$gt"
 	if s.Direction == ember.Descending {
 		op = "$lt"
 	}
 
 	tie := bson.D{{Key: "entity_id", Value: bson.D{{Key: op, Value: c.ID}}}}
-	if s.Path == "" {
-		return tie, nil
-	}
 
 	if c.Value == nil {
 		return nil, fmt.Errorf("%w: sorted cursor requires a value", ember.ErrInvalidCursor)
@@ -48,7 +49,7 @@ func seekPredicate(s ember.Sort, c ember.Cursor) (bson.D, error) {
 
 	v, err := normalizeValue(c.Value)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ember.ErrInvalidCursor, err)
 	}
 
 	f := field(s.Path)
