@@ -60,9 +60,6 @@ func TestEncodeDecodeRoundTripsTheOrderingKey(t *testing.T) {
 	require.Equal(t, e.Event.Type, got.Event.Type)
 }
 
-// encode and decode share the message struct, so a round trip passes under any
-// key names. This pins the wire shape itself, which the mongo and postgres
-// outbox write paths mirror field for field.
 func TestEncodeUsesTheOutboxWireKeys(t *testing.T) {
 	b, err := encode(ember.EventEnvelope{
 		ID:        "e1",

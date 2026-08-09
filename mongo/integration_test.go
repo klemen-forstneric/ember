@@ -28,8 +28,6 @@ func newCounter(id string) *counter {
 
 func (c *counter) Type() string { return "counter" }
 
-// bump emits two events per save, so one version carries more than one event
-// and the intra-save index is load-bearing.
 func (c *counter) bump() {
 	c.N++
 	c.Emit(
@@ -111,8 +109,6 @@ type openLock struct{}
 
 func (openLock) Release(context.Context) error { return nil }
 
-// testCollections returns two collections in the test database, so the entity
-// store and the outbox do not share one.
 func testCollections(t *testing.T) (entities, outbox *mongo.Collection) {
 	t.Helper()
 
@@ -135,10 +131,6 @@ func testCollections(t *testing.T) (entities, outbox *mongo.Collection) {
 	return entities, outbox
 }
 
-// TestSaveThroughRelayPreservesPerEntityOrder is the only test that exercises
-// the whole path the ordering redesign exists to protect: EntitySaver stamps,
-// the outbox persists, the relay drains, the sink receives. Every hop has unit
-// coverage; nothing else asserts they still compose.
 func TestSaveThroughRelayPreservesPerEntityOrder(t *testing.T) {
 	entitiesCol, outboxCol := testCollections(t)
 	ctx := context.Background()
@@ -161,8 +153,6 @@ func TestSaveThroughRelayPreservesPerEntityOrder(t *testing.T) {
 		ember.Bind[*counter](entityRepo, counterMarshaler{}))
 
 	a, b := newCounter("a"), newCounter("b")
-	// Interleaved so the two entities' events are mixed in the outbox, and
-	// deep enough on "a" that its version ordering cannot be luck.
 	for range 5 {
 		a.bump()
 		require.NoError(t, saver.Save(ctx, a))

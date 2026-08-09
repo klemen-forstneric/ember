@@ -13,8 +13,6 @@ type EventMarshaler struct {
 	types map[string]reflect.Type
 }
 
-// NewEventMarshaler registers events by prototype, given as either a value or a
-// pointer. Unmarshal always returns a pointer.
 func NewEventMarshaler(events ...ember.Event) *EventMarshaler {
 	types := make(map[string]reflect.Type, len(events))
 	for _, e := range events {

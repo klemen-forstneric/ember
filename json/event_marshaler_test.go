@@ -25,7 +25,7 @@ type valueEvent struct {
 func (e valueEvent) EntityID() string { return e.Entity }
 func (e valueEvent) Type() string     { return "value" }
 
-func TestRoundTripsAPointerEvent(t *testing.T) {
+func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 	m := NewEventMarshaler(&pointerEvent{})
 	ctx := context.Background()
 
@@ -38,22 +38,7 @@ func TestRoundTripsAPointerEvent(t *testing.T) {
 	require.Equal(t, &pointerEvent{Entity: "a", N: 7}, got)
 }
 
-// A value prototype registers the same type a pointer one does, and Unmarshal
-// returns a pointer either way.
-func TestRoundTripsAValueEvent(t *testing.T) {
-	m := NewEventMarshaler(valueEvent{})
-	ctx := context.Background()
-
-	marshaled, err := m.Marshal(ctx, valueEvent{Entity: "b", N: 3})
-	require.NoError(t, err)
-	require.Equal(t, "value", marshaled.Type)
-
-	got, err := m.Unmarshal(ctx, marshaled)
-	require.NoError(t, err)
-	require.Equal(t, &valueEvent{Entity: "b", N: 3}, got)
-}
-
-func TestRegistersBothFormsTogether(t *testing.T) {
+func TestRegistrationAcceptsValueAndPointerPrototypes(t *testing.T) {
 	m := NewEventMarshaler(&pointerEvent{}, valueEvent{})
 	ctx := context.Background()
 
