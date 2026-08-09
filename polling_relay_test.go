@@ -33,11 +33,10 @@ func evt(id, entityID string) EventEnvelope {
 
 func testRelayConfig() PollingRelayConfig {
 	return PollingRelayConfig{
-		IdleInterval:        time.Millisecond,
-		MaxEntitiesPerRound: 3,
-		MaxEventsPerEntity:  4,
-		LockKey:             "outbox:test",
-		Retention:           24 * time.Hour,
+		IdleInterval: time.Millisecond,
+		BatchSize:    3,
+		LockKey:      "outbox:test",
+		Retention:    24 * time.Hour,
 	}
 }
 
@@ -71,7 +70,7 @@ func (s *PollingRelaySuite) SetupTest() {
 
 func (s *PollingRelaySuite) TestPublishBatchOneCallPerEntity() {
 	batch := []EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "B")}
-	s.repository.On("ListUnpublished", mock.Anything, 3, 4).Return(batch, nil).Once()
+	s.repository.On("ListUnpublished", mock.Anything, 3).Return(batch, nil).Once()
 
 	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[0], batch[1]}).Return(nil).Once()
 	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[2]}).Return(nil).Once()
@@ -87,7 +86,7 @@ func (s *PollingRelaySuite) TestPublishBatchOneCallPerEntity() {
 
 func (s *PollingRelaySuite) TestPublishBatchFailingGroupDoesNotBlockOtherEntities() {
 	batch := []EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "B")}
-	s.repository.On("ListUnpublished", mock.Anything, 3, 4).Return(batch, nil).Once()
+	s.repository.On("ListUnpublished", mock.Anything, 3).Return(batch, nil).Once()
 
 	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[0], batch[1]}).
 		Return(errors.New("route fail")).Once()
@@ -105,7 +104,7 @@ func (s *PollingRelaySuite) TestPublishBatchFailingGroupDoesNotBlockOtherEntitie
 
 func (s *PollingRelaySuite) TestPublishBatchFailingGroupMarksNothingInThatGroup() {
 	batch := []EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "A")}
-	s.repository.On("ListUnpublished", mock.Anything, 3, 4).Return(batch, nil).Once()
+	s.repository.On("ListUnpublished", mock.Anything, 3).Return(batch, nil).Once()
 	s.sink.On("Publish", mock.Anything, batch).Return(errors.New("broker down")).Once()
 
 	logger := &mockLogger{}
@@ -128,7 +127,7 @@ func (s *PollingRelaySuite) TestTickNotLeaderDoesNothing() {
 
 	s.r.tick(context.Background())
 
-	s.repository.AssertNotCalled(s.T(), "ListUnpublished", mock.Anything, mock.Anything, mock.Anything)
+	s.repository.AssertNotCalled(s.T(), "ListUnpublished", mock.Anything, mock.Anything)
 	s.locker.AssertExpectations(s.T())
 }
 
@@ -139,7 +138,7 @@ func (s *PollingRelaySuite) TestPublishPreservesRepositoryOrderWithinAGroup() {
 		versioned("e2", "A", 1, 1),
 	}
 	want := append([]EventEnvelope(nil), batch...)
-	s.repository.On("ListUnpublished", mock.Anything, 3, 4).Return(batch, nil).Once()
+	s.repository.On("ListUnpublished", mock.Anything, 3).Return(batch, nil).Once()
 	s.sink.On("Publish", mock.Anything, want).Return(nil).Once()
 	s.repository.On("MarkPublished", mock.Anything, sameIDs("e1", "e2", "e3"), mock.Anything).Return(nil).Once()
 
@@ -155,9 +154,9 @@ func (s *PollingRelaySuite) TestTickDrainsWhileRoundsMakeProgress() {
 	s.locker.On("TryLock", mock.Anything, "outbox:test").Return(lock, nil).Once()
 	lock.On("Release", mock.Anything).Return(nil).Once()
 
-	s.repository.On("ListUnpublished", mock.Anything, 3, 4).
+	s.repository.On("ListUnpublished", mock.Anything, 3).
 		Return([]EventEnvelope{versioned("e1", "A", 1, 0)}, nil).Once()
-	s.repository.On("ListUnpublished", mock.Anything, 3, 4).
+	s.repository.On("ListUnpublished", mock.Anything, 3).
 		Return([]EventEnvelope{}, nil).Once()
 	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
 	s.repository.On("MarkPublished", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
@@ -174,7 +173,7 @@ func (s *PollingRelaySuite) TestTickStopsWhenARoundPublishesNothing() {
 	lock.On("Release", mock.Anything).Return(nil).Once()
 
 	batch := []EventEnvelope{versioned("e1", "A", 1, 0)}
-	s.repository.On("ListUnpublished", mock.Anything, 3, 4).Return(batch, nil).Once()
+	s.repository.On("ListUnpublished", mock.Anything, 3).Return(batch, nil).Once()
 	s.sink.On("Publish", mock.Anything, batch).Return(errors.New("broker down")).Once()
 
 	s.r.tick(context.Background())
@@ -225,8 +224,7 @@ func (s *PollingRelaySuite) TestDefaultRelayConfig() {
 	cfg := DefaultPollingRelayConfig("k")
 
 	s.Equal(200*time.Millisecond, cfg.IdleInterval)
-	s.Equal(100, cfg.MaxEntitiesPerRound)
-	s.Equal(20, cfg.MaxEventsPerEntity)
+	s.Equal(500, cfg.BatchSize)
 	s.Equal("k", cfg.LockKey)
 	s.Equal(7*24*time.Hour, cfg.Retention)
 }
@@ -254,10 +252,9 @@ func (s *PollingRelaySuite) TestNewRelayInvalidConfig() {
 	}
 
 	tests := map[string]PollingRelayConfig{
-		"IdleInterval zero":        func() PollingRelayConfig { c := valid(); c.IdleInterval = 0; return c }(),
-		"MaxEntitiesPerRound zero": func() PollingRelayConfig { c := valid(); c.MaxEntitiesPerRound = 0; return c }(),
-		"MaxEventsPerEntity zero":  func() PollingRelayConfig { c := valid(); c.MaxEventsPerEntity = 0; return c }(),
-		"Retention zero":           func() PollingRelayConfig { c := valid(); c.Retention = 0; return c }(),
+		"IdleInterval zero": func() PollingRelayConfig { c := valid(); c.IdleInterval = 0; return c }(),
+		"BatchSize zero":    func() PollingRelayConfig { c := valid(); c.BatchSize = 0; return c }(),
+		"Retention zero":    func() PollingRelayConfig { c := valid(); c.Retention = 0; return c }(),
 	}
 
 	for name, cfg := range tests {
