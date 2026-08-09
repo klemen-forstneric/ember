@@ -34,10 +34,17 @@ func evt(id, entityID string) EventEnvelope {
 func testRelayConfig() PollingRelayConfig {
 	return PollingRelayConfig{
 		IdleInterval: time.Millisecond,
-		BatchSize:    10,
+		BatchSize:    3,
 		LockKey:      "outbox:test",
 		Retention:    24 * time.Hour,
 	}
+}
+
+func versioned(id, entityID string, version uint64, index int) EventEnvelope {
+	e := evt(id, entityID)
+	e.Version = version
+	e.Index = index
+	return e
 }
 
 type PollingRelaySuite struct {
@@ -63,7 +70,7 @@ func (s *PollingRelaySuite) SetupTest() {
 
 func (s *PollingRelaySuite) TestPublishBatchOneCallPerEntity() {
 	batch := []EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "B")}
-	s.repository.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
+	s.repository.On("ListUnpublished", mock.Anything, 3).Return(batch, nil).Once()
 
 	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[0], batch[1]}).Return(nil).Once()
 	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[2]}).Return(nil).Once()
@@ -79,7 +86,7 @@ func (s *PollingRelaySuite) TestPublishBatchOneCallPerEntity() {
 
 func (s *PollingRelaySuite) TestPublishBatchFailingGroupDoesNotBlockOtherEntities() {
 	batch := []EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "B")}
-	s.repository.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
+	s.repository.On("ListUnpublished", mock.Anything, 3).Return(batch, nil).Once()
 
 	s.sink.On("Publish", mock.Anything, []EventEnvelope{batch[0], batch[1]}).
 		Return(errors.New("route fail")).Once()
@@ -97,7 +104,7 @@ func (s *PollingRelaySuite) TestPublishBatchFailingGroupDoesNotBlockOtherEntitie
 
 func (s *PollingRelaySuite) TestPublishBatchFailingGroupMarksNothingInThatGroup() {
 	batch := []EventEnvelope{evt("e1", "A"), evt("e2", "A"), evt("e3", "A")}
-	s.repository.On("ListUnpublished", mock.Anything, 10).Return(batch, nil).Once()
+	s.repository.On("ListUnpublished", mock.Anything, 3).Return(batch, nil).Once()
 	s.sink.On("Publish", mock.Anything, batch).Return(errors.New("broker down")).Once()
 
 	logger := &mockLogger{}
@@ -124,26 +131,55 @@ func (s *PollingRelaySuite) TestTickNotLeaderDoesNothing() {
 	s.locker.AssertExpectations(s.T())
 }
 
-func (s *PollingRelaySuite) TestTickDrainsWhileFullBatch() {
+func (s *PollingRelaySuite) TestPublishPreservesRepositoryOrderWithinAGroup() {
+	batch := []EventEnvelope{
+		versioned("e3", "A", 2, 0),
+		versioned("e1", "A", 1, 0),
+		versioned("e2", "A", 1, 1),
+	}
+	want := append([]EventEnvelope(nil), batch...)
+	s.repository.On("ListUnpublished", mock.Anything, 3).Return(batch, nil).Once()
+	s.sink.On("Publish", mock.Anything, want).Return(nil).Once()
+	s.repository.On("MarkPublished", mock.Anything, sameIDs("e1", "e2", "e3"), mock.Anything).Return(nil).Once()
+
+	published, err := s.r.publish(context.Background())
+
+	s.Require().NoError(err)
+	s.Equal(3, published)
+	s.repository.AssertExpectations(s.T())
+}
+
+func (s *PollingRelaySuite) TestTickDrainsWhileRoundsMakeProgress() {
 	lock := &mockLock{}
 	s.locker.On("TryLock", mock.Anything, "outbox:test").Return(lock, nil).Once()
 	lock.On("Release", mock.Anything).Return(nil).Once()
 
-	// cfg.BatchSize is 10. First batch: 10 events (all published) → drain again.
-	// Second batch: empty → stop.
-	full := make([]EventEnvelope, 10)
-	for i := range full {
-		full[i] = evt("full", "A")
-	}
-	s.repository.On("ListUnpublished", mock.Anything, 10).Return(full, nil).Once()
-	s.repository.On("ListUnpublished", mock.Anything, 10).Return([]EventEnvelope{}, nil).Once()
-	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil)
+	s.repository.On("ListUnpublished", mock.Anything, 3).
+		Return([]EventEnvelope{versioned("e1", "A", 1, 0)}, nil).Once()
+	s.repository.On("ListUnpublished", mock.Anything, 3).
+		Return([]EventEnvelope{}, nil).Once()
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
 	s.repository.On("MarkPublished", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	s.r.tick(context.Background())
 
 	s.repository.AssertNumberOfCalls(s.T(), "ListUnpublished", 2)
 	lock.AssertExpectations(s.T())
+}
+
+func (s *PollingRelaySuite) TestTickStopsWhenARoundPublishesNothing() {
+	lock := &mockLock{}
+	s.locker.On("TryLock", mock.Anything, "outbox:test").Return(lock, nil).Once()
+	lock.On("Release", mock.Anything).Return(nil).Once()
+
+	batch := []EventEnvelope{versioned("e1", "A", 1, 0)}
+	s.repository.On("ListUnpublished", mock.Anything, 3).Return(batch, nil).Once()
+	s.sink.On("Publish", mock.Anything, batch).Return(errors.New("broker down")).Once()
+
+	s.r.tick(context.Background())
+
+	s.repository.AssertNumberOfCalls(s.T(), "ListUnpublished", 1)
+	s.repository.AssertNotCalled(s.T(), "MarkPublished", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func (s *PollingRelaySuite) TestRunStopsOnContextCancel() {

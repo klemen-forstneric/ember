@@ -36,7 +36,11 @@ func (s *EnsureOutboxSuite) TestCreatesIndexes() {
 	for _, spec := range specs {
 		if _, ok := spec["partialFilterExpression"]; ok {
 			hasPartial = true
-			s.Equal(bson.D{{Key: "seq", Value: int32(1)}}, spec["key"])
+			s.Equal(bson.D{
+				{Key: "entity_id", Value: int32(1)},
+				{Key: "version", Value: int32(1)},
+				{Key: "idx", Value: int32(1)},
+			}, spec["key"])
 			s.Equal(bson.D{{Key: "published", Value: false}}, spec["partialFilterExpression"])
 		}
 		if _, ok := spec["expireAfterSeconds"]; ok {

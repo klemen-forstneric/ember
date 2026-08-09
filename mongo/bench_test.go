@@ -91,7 +91,8 @@ func BenchmarkEventEncode(b *testing.B) {
 		Type      string         `bson:"type"`
 		Data      []byte         `bson:"data"`
 		Metadata  ember.Metadata `bson:"metadata"`
-		Seq       int64          `bson:"seq"`
+		Version   uint64         `bson:"version"`
+		Idx       int            `bson:"idx"`
 		CreatedAt time.Time      `bson:"created_at"`
 		Published bool           `bson:"published"`
 	}
@@ -103,7 +104,7 @@ func BenchmarkEventEncode(b *testing.B) {
 			b.SetBytes(int64(len(p.data)))
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				e := oldEntry{ID: "e1", EntityID: "A", Type: "T", Data: p.data, Seq: ts.UnixNano(), CreatedAt: ts}
+				e := oldEntry{ID: "e1", EntityID: "A", Type: "T", Data: p.data, Version: 1, Idx: 0, CreatedAt: ts}
 				if _, err := bson.Marshal(e); err != nil {
 					b.Fatal(err)
 				}
@@ -118,7 +119,7 @@ func BenchmarkEventEncode(b *testing.B) {
 				if err := bson.UnmarshalExtJSON(p.data, false, &raw); err != nil {
 					b.Fatal(err)
 				}
-				e := entry{ID: "e1", EntityID: "A", Type: "T", Data: raw, Seq: ts.UnixNano(), CreatedAt: ts}
+				e := entry{ID: "e1", EntityID: "A", Type: "T", Data: raw, Version: 1, Idx: 0, CreatedAt: ts}
 				if _, err := bson.Marshal(e); err != nil {
 					b.Fatal(err)
 				}
@@ -135,7 +136,8 @@ func BenchmarkEventDecode(b *testing.B) {
 		Type      string         `bson:"type"`
 		Data      []byte         `bson:"data"`
 		Metadata  ember.Metadata `bson:"metadata"`
-		Seq       int64          `bson:"seq"`
+		Version   uint64         `bson:"version"`
+		Idx       int            `bson:"idx"`
 		CreatedAt time.Time      `bson:"created_at"`
 		Published bool           `bson:"published"`
 	}
@@ -143,7 +145,7 @@ func BenchmarkEventDecode(b *testing.B) {
 	ts := time.Unix(1_700_000_000, 0).UTC()
 
 	for _, p := range payloads() {
-		oldDoc, err := bson.Marshal(oldEntry{ID: "e1", EntityID: "A", Type: "T", Data: p.data, Seq: ts.UnixNano(), CreatedAt: ts})
+		oldDoc, err := bson.Marshal(oldEntry{ID: "e1", EntityID: "A", Type: "T", Data: p.data, Version: 1, Idx: 0, CreatedAt: ts})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -152,7 +154,7 @@ func BenchmarkEventDecode(b *testing.B) {
 		if err := bson.UnmarshalExtJSON(p.data, false, &raw); err != nil {
 			b.Fatal(err)
 		}
-		newDoc, err := bson.Marshal(entry{ID: "e1", EntityID: "A", Type: "T", Data: raw, Seq: ts.UnixNano(), CreatedAt: ts})
+		newDoc, err := bson.Marshal(entry{ID: "e1", EntityID: "A", Type: "T", Data: raw, Version: 1, Idx: 0, CreatedAt: ts})
 		if err != nil {
 			b.Fatal(err)
 		}

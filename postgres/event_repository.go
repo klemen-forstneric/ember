@@ -28,7 +28,7 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 	}
 
 	insert := psql.Insert(r.table).
-		Columns("id", "entity_id", "type", "data", "metadata", "seq", "created_at", "published")
+		Columns("id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at", "published")
 
 	for _, e := range envelopes {
 		metadata, err := json.Marshal(e.Metadata)
@@ -42,8 +42,9 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 			e.Event.Type,
 			e.Event.Data,
 			metadata,
-			e.Timestamp.UnixNano(),
-			e.Timestamp.UTC(),
+			int64(e.Version),
+			e.Index,
+			e.Timestamp,
 			false,
 		)
 	}
@@ -57,12 +58,10 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 }
 
 func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]ember.EventEnvelope, error) {
-	qb := psql.
-		Select("id", "entity_id", "type", "data", "metadata", "created_at").
+	qb := psql.Select("id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at").
 		From(r.table).
-		Where(sq.Eq{"published": false}).
-		OrderBy("seq ASC")
-
+		Where("NOT published").
+		OrderBy("entity_id", "version", "idx")
 	if limit > 0 {
 		qb = qb.Limit(uint64(limit))
 	}
@@ -82,9 +81,11 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]emb
 		var (
 			id, entityID, typ string
 			data, metadata    []byte
+			version           int64
+			idx               int
 			createdAt         time.Time
 		)
-		if err := rows.Scan(&id, &entityID, &typ, &data, &metadata, &createdAt); err != nil {
+		if err := rows.Scan(&id, &entityID, &typ, &data, &metadata, &version, &idx, &createdAt); err != nil {
 			return nil, err
 		}
 		md := ember.Metadata{}
@@ -97,6 +98,8 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]emb
 		es = append(es, ember.EventEnvelope{
 			ID:       id,
 			EntityID: entityID,
+			Version:  uint64(version),
+			Index:    idx,
 			Event: &ember.MarshaledEvent{
 				Type: typ,
 				Data: data,

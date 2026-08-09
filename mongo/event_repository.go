@@ -30,7 +30,8 @@ type entry struct {
 	Type        string         `bson:"type"`
 	Data        bson.Raw       `bson:"data"`
 	Metadata    ember.Metadata `bson:"metadata"`
-	Seq         int64          `bson:"seq"`
+	Version     uint64         `bson:"version"`
+	Idx         int            `bson:"idx"`
 	CreatedAt   time.Time      `bson:"created_at"`
 	Published   bool           `bson:"published"`
 	PublishedAt *time.Time     `bson:"published_at,omitempty"`
@@ -55,7 +56,8 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 			Type:      e.Event.Type,
 			Data:      data,
 			Metadata:  e.Metadata,
-			Seq:       e.Timestamp.UnixNano(),
+			Version:   e.Version,
+			Idx:       e.Index,
 			CreatedAt: e.Timestamp,
 			Published: false,
 		})
@@ -65,11 +67,14 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 }
 
 func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]ember.EventEnvelope, error) {
-	opts := options.Find().SetSort(bson.D{{Key: "seq", Value: 1}})
+	opts := options.Find().
+		SetSort(bson.D{{Key: "entity_id", Value: 1}, {Key: "version", Value: 1}, {Key: "idx", Value: 1}})
 	if limit > 0 {
-		opts = opts.SetLimit(int64(limit))
+		opts.SetLimit(int64(limit))
 	}
-	cur, err := r.collection.Find(ctx, bson.D{{Key: "published", Value: false}}, opts)
+	filter := bson.D{{Key: "published", Value: false}}
+
+	cur, err := r.collection.Find(ctx, filter, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -90,6 +95,8 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]emb
 		out = append(out, ember.EventEnvelope{
 			ID:       d.ID,
 			EntityID: d.EntityID,
+			Version:  d.Version,
+			Index:    d.Idx,
 			Event: &ember.MarshaledEvent{
 				Type: d.Type,
 				Data: data,

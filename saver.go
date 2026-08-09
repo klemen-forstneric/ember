@@ -8,6 +8,7 @@ import (
 
 var (
 	ErrUnregisteredEntity = errors.New("ember: no binding registered for entity type")
+	ErrForeignEvent       = errors.New("ember: entity emitted an event for another entity")
 )
 
 // EntitySaver
@@ -37,9 +38,15 @@ func (s *EntitySaver) Save(ctx context.Context, es ...Entity) error {
 		return nil
 	}
 
-	var events []Event
+	var events []staged
 	for _, e := range es {
-		events = append(events, e.events().All()...)
+		v := e.Version().Inc().Value()
+		for i, ev := range e.events().All() {
+			if ev.EntityID() != e.ID() {
+				return fmt.Errorf("%w: %s emitted an event for %s", ErrForeignEvent, e.ID(), ev.EntityID())
+			}
+			events = append(events, staged{event: ev, version: v, index: i})
+		}
 	}
 
 	type entities struct {
@@ -66,7 +73,7 @@ func (s *EntitySaver) Save(ctx context.Context, es ...Entity) error {
 		}
 
 		var err error
-		deliver, err = s.publisher.stage(ctx, events...)
+		deliver, err = s.publisher.stage(ctx, events)
 		return err
 	}
 

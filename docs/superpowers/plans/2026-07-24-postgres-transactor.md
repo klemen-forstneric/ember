@@ -1,5 +1,9 @@
 # Postgres Transactor + EventRepository — Implementation Plan
 
+> **Superseded in part:** the outbox schema shown here (`seq`, `OrderBy("seq ASC")`) was
+> replaced by `docs/superpowers/specs/2026-08-08-ember-event-ordering-design.md`. This plan
+> is an execution record and is not being rewritten.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** A reentrant `postgres.Transactor`, a transaction-aware `postgres.EntityRepository`, and a new `postgres.EventRepository` (outbox parity with mongo), so `EntitySaver` persists an entity and its events atomically on postgres.

@@ -14,9 +14,16 @@ type EventMarshaler struct {
 }
 
 func NewEventMarshaler(events ...ember.Event) *EventMarshaler {
-	types := make(map[string]reflect.Type)
+	types := make(map[string]reflect.Type, len(events))
 	for _, e := range events {
-		types[e.Type()] = reflect.TypeOf(e).Elem()
+		typ := reflect.TypeOf(e)
+		if typ == nil {
+			continue
+		}
+		if typ.Kind() == reflect.Pointer {
+			typ = typ.Elem()
+		}
+		types[e.Type()] = typ
 	}
 
 	return &EventMarshaler{types: types}

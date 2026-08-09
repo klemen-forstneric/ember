@@ -157,7 +157,7 @@ func (r *PollingRelay) tick(ctx context.Context) {
 			r.logger.Error(ctx, "Failed to drain outbox batch", err)
 			return
 		}
-		if published < r.cfg.BatchSize {
+		if published == 0 {
 			return
 		}
 	}

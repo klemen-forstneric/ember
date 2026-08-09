@@ -37,10 +37,11 @@ func EnsureCollection(ctx context.Context, c *mongo.Collection) error {
 func EnsureOutbox(ctx context.Context, c *mongo.Collection) error {
 	models := []mongo.IndexModel{
 		{
-			// Pending scan: only documents with published:false are indexed,
-			// so the index shrinks to the backlog. Equality is required —
-			// mongo partial filters do not allow $exists:false.
-			Keys: bson.D{{Key: "seq", Value: 1}},
+			Keys: bson.D{
+				{Key: "entity_id", Value: 1},
+				{Key: "version", Value: 1},
+				{Key: "idx", Value: 1},
+			},
 			Options: options.Index().
 				SetPartialFilterExpression(bson.D{{Key: "published", Value: false}}),
 		},
