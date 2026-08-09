@@ -113,9 +113,9 @@ func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter,
 
 	opts := options.Find()
 	if s.Path != "" {
-		dir := 1
+		dir := sortAscending
 		if s.Direction == ember.Descending {
-			dir = -1
+			dir = sortDescending
 		}
 		opts.SetSort(bson.D{{Key: field(s.Path), Value: dir}})
 	}

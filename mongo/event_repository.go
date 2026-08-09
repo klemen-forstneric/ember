@@ -68,7 +68,11 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 
 func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]ember.EventEnvelope, error) {
 	opts := options.Find().
-		SetSort(bson.D{{Key: "entity_id", Value: 1}, {Key: "version", Value: 1}, {Key: "idx", Value: 1}})
+		SetSort(bson.D{
+			{Key: "entity_id", Value: sortAscending},
+			{Key: "version", Value: sortAscending},
+			{Key: "idx", Value: sortAscending},
+		})
 	if limit > 0 {
 		opts.SetLimit(int64(limit))
 	}

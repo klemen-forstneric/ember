@@ -61,7 +61,7 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]emb
 	qb := psql.Select("id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at").
 		From(r.table).
 		Where("NOT published").
-		OrderBy("entity_id", "version", "idx")
+		OrderBy("entity_id", "version ASC", "idx ASC")
 	if limit > 0 {
 		qb = qb.Limit(uint64(limit))
 	}

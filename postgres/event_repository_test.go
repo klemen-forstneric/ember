@@ -74,7 +74,7 @@ func TestEventListUnpublishedMapsRows(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at"}).
 		AddRow("e1", "A", "Created", []byte(`{"k":"v"}`), []byte(`{"corr":"c-e1"}`), int64(1), 0, ts)
 	mock.ExpectQuery("SELECT id, entity_id, type, data, metadata, version, idx, created_at FROM events " +
-		"WHERE NOT published ORDER BY entity_id, version, idx LIMIT 10").
+		"WHERE NOT published ORDER BY entity_id, version ASC, idx ASC LIMIT 10").
 		WillReturnRows(rows)
 
 	repo := NewEventRepository(NewDB(db), "events")
@@ -100,7 +100,7 @@ func TestEventListUnpublishedNoLimitOmitsLimitClause(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{"id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at"})
 	mock.ExpectQuery("SELECT id, entity_id, type, data, metadata, version, idx, created_at FROM events " +
-		"WHERE NOT published ORDER BY entity_id, version, idx$").
+		"WHERE NOT published ORDER BY entity_id, version ASC, idx ASC$").
 		WillReturnRows(rows)
 
 	repo := NewEventRepository(NewDB(db), "events")
@@ -144,7 +144,7 @@ func TestEventListUnpublishedOrdersByEntityThenVersion(t *testing.T) {
 		AddRow("e2", "A", "Created", []byte(`{"k":"v"}`), []byte(`{"corr":"c-e2"}`), int64(1), 1, time.Unix(1, 0).UTC())
 
 	mock.ExpectQuery("SELECT id, entity_id, type, data, metadata, version, idx, created_at FROM events " +
-		"WHERE NOT published ORDER BY entity_id, version, idx LIMIT 3").
+		"WHERE NOT published ORDER BY entity_id, version ASC, idx ASC LIMIT 3").
 		WillReturnRows(rows)
 
 	repo := NewEventRepository(NewDB(db), "events")
