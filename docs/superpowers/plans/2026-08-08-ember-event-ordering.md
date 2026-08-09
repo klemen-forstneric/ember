@@ -1,5 +1,11 @@
 # Ember Event Ordering Implementation Plan
 
+> **Superseded:** this plan's two-phase drain (`sampleEntities`, the `MaxEntitiesPerRound`/
+> `MaxEventsPerEntity` contract, the postgres CTE) was replaced by a single sorted query in
+> commits `99462dd..9606afd`. See the "Fetch order" decision and "The drain" section of
+> `docs/superpowers/specs/2026-08-08-ember-event-ordering-design.md` for the current design.
+> This file is an execution record and is left as originally written below.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the outbox's wall-clock ordering key (`seq = Timestamp.UnixNano()`) with a per-entity `(version, index)` key, and make the polling relay drain two-phase so high-version entities cannot starve.

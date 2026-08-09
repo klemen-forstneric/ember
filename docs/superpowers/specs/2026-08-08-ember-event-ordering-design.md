@@ -198,8 +198,14 @@ Postgres, one statement, built with squirrel like `Save` and `MarkPublished`:
 SELECT id, entity_id, type, data, metadata, version, idx, created_at
 FROM outbox WHERE NOT published
 ORDER BY entity_id, version, idx
-LIMIT $1;
+LIMIT 500;
 ```
+
+`WHERE NOT published` is a bare predicate (`sq.Where("NOT published")`), not
+`sq.Eq{"published": false}` — the latter binds `published = $1`, which a generic prepared-
+statement plan cannot prove implies the partial index's `WHERE NOT published` predicate, so
+the index silently stops being used. `LIMIT` is squirrel's `.Limit(n)`, which inlines the
+value as a literal rather than a bind parameter, so it is never a `$n` placeholder either.
 
 Mongo is a single `find`: filter `{published: false}`, sort `{entity_id: 1, version: 1, idx:
 1}`, limit `limit`. Both backends dropped the two-phase machinery this replaced — mongo's
@@ -233,6 +239,15 @@ handling in `publish` is unchanged — `continue`, leave unpublished, retry next
 failing group is refetched at the front of the next round (lowest `entity_id`), so once the
 batch is nothing but failing rows, the round publishes zero and `tick` exits rather than
 spinning on the same poison group forever.
+
+That non-spin does not mean the round is harmless. A single permanently-failing entity
+holding the lowest `entity_id` with at least `BatchSize` unpublished events occupies the
+entire window every round: every fetch returns only that entity's events, `publish` returns
+0, and `tick` exits without anyone else draining — head-of-line blocking, no saturation
+required, with no upper bound on how long it lasts. The random-sample design this replaced
+made a poison group not reliably reappear next round; the entity-first sort trades that away
+for the simpler query. Accepted, not new — it is the pre-branch outbox's behavior returning
+under the new key.
 
 ### Storage
 
