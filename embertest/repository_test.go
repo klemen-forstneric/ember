@@ -9,6 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func ids(ms []*ember.MarshaledEntity) []string {
+	out := make([]string, len(ms))
+	for i, m := range ms {
+		out[i] = m.ID
+	}
+	return out
+}
+
 func me(id, typ string, ver uint64, data string) *ember.MarshaledEntity {
 	// ver is the desired stored value; produce initial=ver-1 + one Inc so Save
 	// sees initial==0 for a fresh insert (ver==1) or initial==n-1 for an update.
@@ -125,4 +133,92 @@ func TestListGetDoNotAliasData(t *testing.T) {
 	again, err := r.Get(ctx, "t", "1")
 	require.NoError(t, err)
 	assert.Equal(t, byte('{'), again.Data[0]) // store uncorrupted
+}
+
+func TestListPagingLimitAndOffset(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, me("a", "t", 1, `{"n":1}`)))
+	require.NoError(t, r.Save(ctx, me("b", "t", 1, `{"n":2}`)))
+	require.NoError(t, r.Save(ctx, me("c", "t", 1, `{"n":3}`)))
+
+	sort := ember.Asc("n").Numeric()
+
+	first, err := r.List(ctx, "t", nil, sort, ember.Limit(2))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, ids(first))
+
+	second, err := r.List(ctx, "t", nil, sort, ember.Limit(2).Skip(2))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"c"}, ids(second))
+
+	past, err := r.List(ctx, "t", nil, sort, ember.Limit(2).Skip(99))
+	require.NoError(t, err)
+	assert.Empty(t, past)
+}
+
+func TestListPagingKeysetAcrossTie(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, me("idA", "t", 1, `{"n":5}`)))
+	require.NoError(t, r.Save(ctx, me("idB", "t", 1, `{"n":5}`)))
+	require.NoError(t, r.Save(ctx, me("idC", "t", 1, `{"n":5}`)))
+	require.NoError(t, r.Save(ctx, me("idD", "t", 1, `{"n":6}`)))
+
+	sort := ember.Asc("n").Numeric()
+
+	first, err := r.List(ctx, "t", nil, sort, ember.Limit(2))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"idA", "idB"}, ids(first))
+
+	second, err := r.List(ctx, "t", nil, sort, ember.Limit(2).After(float64(5), "idB"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"idC", "idD"}, ids(second))
+
+	third, err := r.List(ctx, "t", nil, sort, ember.Limit(2).After(float64(6), "idD"))
+	require.NoError(t, err)
+	assert.Empty(t, third)
+}
+
+func TestListPagingUnsortedKeyset(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, me("a", "t", 1, `{}`)))
+	require.NoError(t, r.Save(ctx, me("b", "t", 1, `{}`)))
+	require.NoError(t, r.Save(ctx, me("c", "t", 1, `{}`)))
+
+	first, err := r.List(ctx, "t", nil, ember.Unsorted(), ember.Limit(2))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, ids(first))
+
+	second, err := r.List(ctx, "t", nil, ember.Unsorted(), ember.Limit(2).After(nil, "b"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"c"}, ids(second))
+}
+
+func TestListPagingUnsortedIgnoresDescendingDirection(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, me("a", "t", 1, `{}`)))
+	require.NoError(t, r.Save(ctx, me("b", "t", 1, `{}`)))
+	require.NoError(t, r.Save(ctx, me("c", "t", 1, `{}`)))
+
+	s := ember.Sort{Direction: ember.Descending}
+
+	first, err := r.List(ctx, "t", nil, s, ember.Limit(2))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, ids(first))
+
+	second, err := r.List(ctx, "t", nil, s, ember.Limit(2).After(nil, "b"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"c"}, ids(second))
+}
+
+func TestListPagingSortedCursorNeedsValue(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, me("a", "t", 1, `{"n":1}`)))
+
+	_, err := r.List(ctx, "t", nil, ember.Asc("n").Numeric(), ember.Limit(2).After(nil, "a"))
+	require.ErrorIs(t, err, ember.ErrInvalidCursor)
 }

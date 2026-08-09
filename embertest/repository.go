@@ -60,7 +60,7 @@ func (r *EntityRepository) Get(_ context.Context, typ, id string) (*ember.Marsha
 	return nil, ember.ErrEntityNotFound
 }
 
-func (r *EntityRepository) List(_ context.Context, typ string, f ember.Filter, s ember.Sort, _ ember.Page) ([]*ember.MarshaledEntity, error) {
+func (r *EntityRepository) List(_ context.Context, typ string, f ember.Filter, s ember.Sort, p ember.Page) ([]*ember.MarshaledEntity, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -78,6 +78,24 @@ func (r *EntityRepository) List(_ context.Context, typ string, f ember.Filter, s
 		}
 	}
 
-	applySort(out, s)
+	applySort(out, s, !p.IsZero())
+
+	if !p.Cursor.IsZero() {
+		seeked, err := seek(out, s, p.Cursor)
+		if err != nil {
+			return nil, err
+		}
+		out = seeked
+	}
+	if p.Offset > 0 {
+		if p.Offset >= len(out) {
+			return nil, nil
+		}
+		out = out[p.Offset:]
+	}
+	if p.Limit > 0 && len(out) > p.Limit {
+		out = out[:p.Limit]
+	}
+
 	return out, nil
 }

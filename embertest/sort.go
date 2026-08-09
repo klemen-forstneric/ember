@@ -1,6 +1,7 @@
 package embertest
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"time"
@@ -8,21 +9,74 @@ import (
 	"github.com/klemen-forstneric/ember"
 )
 
-func applySort(items []*ember.MarshaledEntity, s ember.Sort) {
+func applySort(items []*ember.MarshaledEntity, s ember.Sort, paged bool) {
 	if s.Path == "" {
+		if paged {
+			sort.SliceStable(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+		}
 		return
 	}
+
 	sort.SliceStable(items, func(i, j int) bool {
 		vi, oki, _ := lookup(items[i], s.Path)
 		vj, okj, _ := lookup(items[j], s.Path)
 		if !oki || !okj {
 			return oki && !okj
 		}
-		if s.Direction == ember.Descending {
-			return lessThan(vj, vi, s.Ordering)
+		if lessThan(vi, vj, s.Ordering) {
+			return s.Direction != ember.Descending
 		}
-		return lessThan(vi, vj, s.Ordering)
+		if lessThan(vj, vi, s.Ordering) {
+			return s.Direction == ember.Descending
+		}
+		if !paged {
+			return false
+		}
+		if s.Direction == ember.Descending {
+			return items[j].ID < items[i].ID
+		}
+		return items[i].ID < items[j].ID
 	})
+}
+
+func seek(items []*ember.MarshaledEntity, s ember.Sort, c ember.Cursor) ([]*ember.MarshaledEntity, error) {
+	if s.Path != "" && c.Value == nil {
+		return nil, fmt.Errorf("%w: sorted cursor requires a value", ember.ErrInvalidCursor)
+	}
+
+	out := make([]*ember.MarshaledEntity, 0, len(items))
+	for _, m := range items {
+		if afterCursor(m, s, c) {
+			out = append(out, m)
+		}
+	}
+
+	return out, nil
+}
+
+func afterCursor(m *ember.MarshaledEntity, s ember.Sort, c ember.Cursor) bool {
+	if s.Path == "" {
+		return m.ID > c.ID
+	}
+
+	idAfter := m.ID > c.ID
+	if s.Direction == ember.Descending {
+		idAfter = m.ID < c.ID
+	}
+
+	v, ok, err := lookup(m, s.Path)
+	if err != nil || !ok {
+		return false
+	}
+
+	if lessThan(v, c.Value, s.Ordering) {
+		return s.Direction == ember.Descending
+	}
+	if lessThan(c.Value, v, s.Ordering) {
+		return s.Direction != ember.Descending
+	}
+
+	return idAfter
 }
 
 func lessThan(a, b any, o ember.Ordering) bool {
