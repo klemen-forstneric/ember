@@ -24,8 +24,8 @@ type Cursor struct {
 
 func (c Cursor) IsZero() bool { return c.ID == "" }
 
-// cursorWire
-type cursorWire struct {
+// token
+type token struct {
 	Kind  string `json:"k,omitempty"`
 	Value string `json:"v,omitempty"`
 	ID    string `json:"i"`
@@ -39,7 +39,7 @@ func (c Cursor) MarshalText() ([]byte, error) {
 		return nil, nil
 	}
 
-	w := cursorWire{ID: c.ID}
+	w := token{ID: c.ID}
 	switch x := c.Value.(type) {
 	case nil:
 	case string:
@@ -85,7 +85,7 @@ func (c *Cursor) UnmarshalText(b []byte) error {
 		return fmt.Errorf("%w: %v", ErrInvalidCursor, err)
 	}
 
-	var w cursorWire
+	var w token
 	if err := json.Unmarshal(raw, &w); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidCursor, err)
 	}
