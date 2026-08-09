@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
@@ -58,21 +57,23 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 	return err
 }
 
-func listUnpublishedQuery(table string) string {
-	return fmt.Sprintf(`
-WITH picked AS (
-  SELECT entity_id FROM %[1]s WHERE NOT published GROUP BY entity_id ORDER BY random() LIMIT $1
-), ranked AS (
-  SELECT o.id, o.entity_id, o.type, o.data, o.metadata, o.version, o.idx, o.created_at,
-         row_number() OVER (PARTITION BY o.entity_id ORDER BY o.version, o.idx) rn
-  FROM %[1]s o JOIN picked p USING (entity_id) WHERE NOT o.published
-)
-SELECT id, entity_id, type, data, metadata, version, idx, created_at
-FROM ranked WHERE rn <= $2 ORDER BY entity_id, version, idx`, table)
+func listUnpublishedQuery(table string, limit int) (string, []interface{}, error) {
+	qb := psql.Select("id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at").
+		From(table).
+		Where(sq.Eq{"published": false}).
+		OrderBy("entity_id", "version", "idx")
+	if limit > 0 {
+		qb = qb.Limit(uint64(limit))
+	}
+	return qb.ToSql()
 }
 
-func (r *EventRepository) ListUnpublished(ctx context.Context, maxEntities, maxEventsPerEntity int) ([]ember.EventEnvelope, error) {
-	rows, err := r.db.Conn(ctx).QueryContext(ctx, listUnpublishedQuery(r.table), maxEntities, maxEventsPerEntity)
+func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]ember.EventEnvelope, error) {
+	query, args, err := listUnpublishedQuery(r.table, limit)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.db.Conn(ctx).QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

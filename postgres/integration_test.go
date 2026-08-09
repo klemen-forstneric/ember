@@ -44,7 +44,10 @@ func TestListUnpublishedQueryParses(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = pool.Exec(fmt.Sprintf(`DROP TABLE IF EXISTS %s`, table)) })
 
-	stmt, err := pool.Prepare(listUnpublishedQuery(table))
+	query, _, err := listUnpublishedQuery(table, 10)
+	require.NoError(t, err)
+
+	stmt, err := pool.Prepare(query)
 	require.NoError(t, err)
 	require.NoError(t, stmt.Close())
 }

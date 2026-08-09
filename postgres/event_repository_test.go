@@ -57,10 +57,12 @@ func TestEventListUnpublishedMapsRows(t *testing.T) {
 	ts := time.Unix(1_700_000_000, 0).UTC()
 	rows := sqlmock.NewRows([]string{"id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at"}).
 		AddRow("e1", "A", "Created", []byte(`{"k":"v"}`), []byte(`{"corr":"c-e1"}`), int64(1), 0, ts)
-	mock.ExpectQuery("ORDER BY random\\(\\)").WithArgs(10, 10).WillReturnRows(rows)
+	mock.ExpectQuery("SELECT id, entity_id, type, data, metadata, version, idx, created_at FROM events " +
+		"WHERE published = (.+) ORDER BY entity_id, version, idx LIMIT 10").
+		WithArgs(false).WillReturnRows(rows)
 
 	repo := NewEventRepository(NewDB(db), "events")
-	got, err := repo.ListUnpublished(context.Background(), 10, 10)
+	got, err := repo.ListUnpublished(context.Background(), 10)
 
 	require.NoError(t, err)
 	require.Len(t, got, 1)
@@ -72,6 +74,23 @@ func TestEventListUnpublishedMapsRows(t *testing.T) {
 	require.Equal(t, 0, got[0].Index)
 	require.Equal(t, ts, got[0].Timestamp)
 	require.Equal(t, "c-e1", got[0].Metadata[ember.MetadataKey("corr")])
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestEventListUnpublishedNoLimitOmitsLimitClause(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at"})
+	mock.ExpectQuery("SELECT id, entity_id, type, data, metadata, version, idx, created_at FROM events " +
+		"WHERE published = (.+) ORDER BY entity_id, version, idx$").
+		WithArgs(false).WillReturnRows(rows)
+
+	repo := NewEventRepository(NewDB(db), "events")
+	_, err = repo.ListUnpublished(context.Background(), 0)
+
+	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -99,7 +118,7 @@ func TestEventMarkPublishedEmptyIsNoop(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestEventListUnpublishedSamplesEntitiesAndRanksByVersion(t *testing.T) {
+func TestEventListUnpublishedOrdersByEntityThenVersion(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -108,10 +127,12 @@ func TestEventListUnpublishedSamplesEntitiesAndRanksByVersion(t *testing.T) {
 		AddRow("e1", "A", "Created", []byte(`{"k":"v"}`), []byte(`{"corr":"c-e1"}`), int64(1), 0, time.Unix(1, 0).UTC()).
 		AddRow("e2", "A", "Created", []byte(`{"k":"v"}`), []byte(`{"corr":"c-e2"}`), int64(1), 1, time.Unix(1, 0).UTC())
 
-	mock.ExpectQuery("ORDER BY random\\(\\)").WithArgs(2, 3).WillReturnRows(rows)
+	mock.ExpectQuery("SELECT id, entity_id, type, data, metadata, version, idx, created_at FROM events " +
+		"WHERE published = (.+) ORDER BY entity_id, version, idx LIMIT 3").
+		WithArgs(false).WillReturnRows(rows)
 
 	repo := NewEventRepository(NewDB(db), "events")
-	got, err := repo.ListUnpublished(context.Background(), 2, 3)
+	got, err := repo.ListUnpublished(context.Background(), 3)
 
 	require.NoError(t, err)
 	require.Len(t, got, 2)
