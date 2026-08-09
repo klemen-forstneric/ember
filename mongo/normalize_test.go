@@ -166,7 +166,7 @@ func (s *NormalizeDocumentIDsSuite) TestLeavesOutboxEntriesAlone() {
 	s.Equal(int64(2), s.countIDsOfType("string"), "every event _id must survive")
 
 	// The relay must still be able to read its own backlog.
-	got, err := events.ListUnpublished(ctx, 10, 10)
+	got, err := events.ListUnpublished(ctx, 10)
 	s.Require().NoError(err)
 	s.ElementsMatch([]string{"evt1", "evt2"}, ids(got))
 

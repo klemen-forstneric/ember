@@ -2,7 +2,6 @@ package mongo
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -62,7 +61,7 @@ func (s *EventRepositorySuite) TestListUnpublishedOrdersByVersionThenIndex() {
 		versioned("e2", "A", 1, 1, base),
 	}))
 
-	got, err := s.repo.ListUnpublished(ctx, 10, 10)
+	got, err := s.repo.ListUnpublished(ctx, 10)
 	s.Require().NoError(err)
 	s.Equal([]string{"e1", "e2", "e3"}, ids(got))
 	s.Equal(uint64(1), got[0].Version)
@@ -81,56 +80,38 @@ func (s *EventRepositorySuite) TestListUnpublishedIgnoresTheClock() {
 		versioned("e1", "A", 1, 0, base.Add(3*time.Second)),
 	}))
 
-	got, err := s.repo.ListUnpublished(ctx, 10, 10)
+	got, err := s.repo.ListUnpublished(ctx, 10)
 	s.Require().NoError(err)
 	s.Equal([]string{"e1", "e2", "e3"}, ids(got))
 }
 
-func (s *EventRepositorySuite) TestListUnpublishedCapsEntitiesAndEventsPerEntity() {
+func (s *EventRepositorySuite) TestListUnpublishedOrdersAcrossEntitiesByEntityIDThenVersion() {
 	ctx := context.Background()
 	base := time.Unix(1_700_000_000, 0).UTC()
-	var envs []ember.EventEnvelope
-	for _, entity := range []string{"A", "B", "C"} {
-		for v := uint64(1); v <= 5; v++ {
-			envs = append(envs, versioned(fmt.Sprintf("%s-%d", entity, v), entity, v, 0, base))
-		}
-	}
-	s.Require().NoError(s.repo.Save(ctx, envs))
+	s.Require().NoError(s.repo.Save(ctx, []ember.EventEnvelope{
+		versioned("c-2", "C", 2, 0, base),
+		versioned("a-2", "A", 2, 0, base),
+		versioned("c-1", "C", 1, 0, base),
+		versioned("b-1", "B", 1, 0, base),
+		versioned("a-1", "A", 1, 0, base),
+	}))
 
-	got, err := s.repo.ListUnpublished(ctx, 2, 3)
+	got, err := s.repo.ListUnpublished(ctx, 10)
 	s.Require().NoError(err)
+	s.Equal([]string{"a-1", "a-2", "b-1", "c-1", "c-2"}, ids(got))
 
 	perEntity := map[string][]uint64{}
+	var order []string
 	for _, e := range got {
+		if len(perEntity[e.EntityID]) == 0 {
+			order = append(order, e.EntityID)
+		}
 		perEntity[e.EntityID] = append(perEntity[e.EntityID], e.Version)
 	}
-	s.Len(perEntity, 2, "at most two entities per round")
+	s.Equal([]string{"A", "B", "C"}, order, "runs must be grouped by entity_id in ascending order")
 	for entity, versions := range perEntity {
-		s.Len(versions, 3, "entity %s has enough backlog to fill its cap", entity)
-		s.Equal(uint64(1), versions[0], "each entity's run must start at its lowest unpublished version")
-		s.True(slices.IsSorted(versions), "each entity's run must be version-ordered")
+		s.True(slices.IsSorted(versions), "entity %s's run must be a version-ordered prefix", entity)
 	}
-}
-
-func (s *EventRepositorySuite) TestListUnpublishedSamplesAcrossEntities() {
-	ctx := context.Background()
-	base := time.Unix(1_700_000_000, 0).UTC()
-	var envs []ember.EventEnvelope
-	for _, entity := range []string{"A", "B", "C", "D"} {
-		envs = append(envs, versioned(entity+"-1", entity, 1, 0, base))
-	}
-	s.Require().NoError(s.repo.Save(ctx, envs))
-
-	seen := map[string]bool{}
-	for range 40 {
-		got, err := s.repo.ListUnpublished(ctx, 2, 10)
-		s.Require().NoError(err)
-		for _, e := range got {
-			seen[e.EntityID] = true
-		}
-	}
-
-	s.Len(seen, 4, "every entity must be reachable across rounds")
 }
 
 // TestSaveStoresDataAsADocument pins the reason data is not stored as bytes: an
@@ -155,7 +136,7 @@ func (s *EventRepositorySuite) TestListUnpublishedRespectsLimit() {
 		versioned("e3", "A", 3, 0, base),
 	}))
 
-	got, err := s.repo.ListUnpublished(ctx, 10, 2)
+	got, err := s.repo.ListUnpublished(ctx, 2)
 	s.Require().NoError(err)
 	s.Equal([]string{"e1", "e2"}, ids(got))
 }
@@ -171,7 +152,7 @@ func (s *EventRepositorySuite) TestMarkPublishedRemovesFromPending() {
 	expiresAt := time.Now().UTC().Add(24 * time.Hour)
 	s.Require().NoError(s.repo.MarkPublished(ctx, []string{"e1"}, expiresAt))
 
-	got, err := s.repo.ListUnpublished(ctx, 10, 10)
+	got, err := s.repo.ListUnpublished(ctx, 10)
 	s.Require().NoError(err)
 	s.Equal([]string{"e2"}, ids(got), "published event must drop out of pending")
 }
