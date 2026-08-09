@@ -2,8 +2,10 @@ package mongo
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
 	"github.com/klemen-forstneric/ember"
@@ -117,3 +119,100 @@ func (s *EntityRepositorySuite) TestListFiltersByEntityID() {
 
 // Compile-time assertion that the repository satisfies the interface.
 var _ ember.EntityRepository = (*EntityRepository)(nil)
+
+func TestListPagingLimitAndSkip(t *testing.T) {
+	col := connectTestMongo(t)
+	ctx := context.Background()
+
+	_, err := col.InsertMany(ctx, []interface{}{
+		makeNumEntity(1, "id1"),
+		makeNumEntity(2, "id2"),
+		makeNumEntity(3, "id3"),
+	})
+	require.NoError(t, err)
+
+	repo, err := NewEntityRepository(ctx, col)
+	require.NoError(t, err)
+
+	first, err := repo.List(ctx, "fake", nil, ember.Asc("n").Numeric(), ember.Limit(2))
+	require.NoError(t, err)
+	require.Equal(t, []float64{1, 2}, nNumbers(first))
+
+	second, err := repo.List(ctx, "fake", nil, ember.Asc("n").Numeric(), ember.Limit(2).Skip(2))
+	require.NoError(t, err)
+	require.Equal(t, []float64{3}, nNumbers(second))
+}
+
+func TestListPagingUnsortedKeyset(t *testing.T) {
+	col := connectTestMongo(t)
+	ctx := context.Background()
+
+	_, err := col.InsertMany(ctx, []interface{}{
+		makeNumEntity(1, "id1"),
+		makeNumEntity(2, "id2"),
+		makeNumEntity(3, "id3"),
+	})
+	require.NoError(t, err)
+
+	repo, err := NewEntityRepository(ctx, col)
+	require.NoError(t, err)
+
+	first, err := repo.List(ctx, "fake", nil, ember.Unsorted(), ember.Limit(2))
+	require.NoError(t, err)
+	require.Len(t, first, 2)
+	require.Equal(t, []string{"id1", "id2"}, []string{first[0].ID, first[1].ID})
+
+	second, err := repo.List(ctx, "fake", nil, ember.Unsorted(), ember.Limit(2).After(nil, first[1].ID))
+	require.NoError(t, err)
+	require.Equal(t, []string{"id3"}, []string{second[0].ID})
+}
+
+func TestListPagingKeysetAcrossTie(t *testing.T) {
+	col := connectTestMongo(t)
+	ctx := context.Background()
+
+	_, err := col.InsertMany(ctx, []interface{}{
+		makeNumEntity(5, "idA"),
+		makeNumEntity(5, "idB"),
+		makeNumEntity(5, "idC"),
+		makeNumEntity(6, "idD"),
+	})
+	require.NoError(t, err)
+
+	repo, err := NewEntityRepository(ctx, col)
+	require.NoError(t, err)
+
+	sort := ember.Asc("n").Numeric()
+	var seen []string
+	page := ember.Limit(2)
+	for {
+		got, err := repo.List(ctx, "fake", nil, sort, page)
+		require.NoError(t, err)
+		if len(got) == 0 {
+			break
+		}
+		for _, m := range got {
+			seen = append(seen, m.ID)
+		}
+		last := got[len(got)-1]
+		var d map[string]float64
+		require.NoError(t, json.Unmarshal(last.Data, &d))
+		page = ember.Limit(2).After(d["n"], last.ID)
+		if len(got) < 2 {
+			break
+		}
+	}
+
+	require.Equal(t, []string{"idA", "idB", "idC", "idD"}, seen)
+}
+
+func TestListPagingSortedCursorNeedsValue(t *testing.T) {
+	col := connectTestMongo(t)
+	ctx := context.Background()
+
+	repo, err := NewEntityRepository(ctx, col)
+	require.NoError(t, err)
+
+	_, err = repo.List(ctx, "fake", nil, ember.Asc("n").Numeric(), ember.Limit(2).After(nil, "idA"))
+	require.ErrorIs(t, err, ember.ErrInvalidCursor)
+}

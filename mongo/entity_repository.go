@@ -97,27 +97,35 @@ func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.Mars
 	return d.entity()
 }
 
-func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter, s ember.Sort, _ ember.Page) ([]*ember.MarshaledEntity, error) {
+func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter, s ember.Sort, p ember.Page) ([]*ember.MarshaledEntity, error) {
 	predicate, err := buildFilter(f)
 	if err != nil {
 		return nil, err
 	}
 
-	filter := bson.D{{Key: "type", Value: typ}}
+	conds := bson.A{bson.D{{Key: "type", Value: typ}}}
 	if len(predicate) > 0 {
-		filter = bson.D{{Key: "$and", Value: bson.A{
-			bson.D{{Key: "type", Value: typ}},
-			predicate,
-		}}}
+		conds = append(conds, predicate)
+	}
+	if !p.Cursor.IsZero() {
+		seek, err := seekPredicate(s, p.Cursor)
+		if err != nil {
+			return nil, err
+		}
+		conds = append(conds, seek)
 	}
 
+	filter := bson.D{{Key: "$and", Value: conds}}
+
 	opts := options.Find()
-	if s.Path != "" {
-		dir := sortAscending
-		if s.Direction == ember.Descending {
-			dir = sortDescending
-		}
-		opts.SetSort(bson.D{{Key: field(s.Path), Value: dir}})
+	if doc := sortDoc(s, !p.IsZero()); doc != nil {
+		opts.SetSort(doc)
+	}
+	if p.Limit > 0 {
+		opts.SetLimit(int64(p.Limit))
+	}
+	if p.Offset > 0 {
+		opts.SetSkip(int64(p.Offset))
 	}
 
 	cur, err := r.collection.Find(ctx, filter, opts)
