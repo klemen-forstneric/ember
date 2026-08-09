@@ -47,7 +47,10 @@ func (r *ProducerRegistry) Get(_ context.Context, eventType string) (producer, e
 	if p, ok := r.producers[topic]; ok {
 		return p, nil
 	}
-	p, err := r.client.CreateProducer(pulsar.ProducerOptions{Topic: topic})
+	p, err := r.client.CreateProducer(pulsar.ProducerOptions{
+		Topic:              topic,
+		BatcherBuilderType: pulsar.KeyBasedBatchBuilder,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("could not create producer for topic %q: %w", topic, err)
 	}

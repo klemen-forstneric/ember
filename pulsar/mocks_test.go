@@ -2,10 +2,84 @@ package pulsar
 
 import (
 	"context"
+	"time"
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/stretchr/testify/mock"
 )
+
+// mockPulsarClient
+type mockPulsarClient struct {
+	mock.Mock
+}
+
+func (m *mockPulsarClient) CreateProducer(opts pulsar.ProducerOptions) (pulsar.Producer, error) {
+	args := m.Called(opts)
+	var p pulsar.Producer
+	if v := args.Get(0); v != nil {
+		p = v.(pulsar.Producer)
+	}
+	return p, args.Error(1)
+}
+
+func (m *mockPulsarClient) Subscribe(opts pulsar.ConsumerOptions) (pulsar.Consumer, error) {
+	args := m.Called(opts)
+	var c pulsar.Consumer
+	if v := args.Get(0); v != nil {
+		c = v.(pulsar.Consumer)
+	}
+	return c, args.Error(1)
+}
+
+func (m *mockPulsarClient) CreateReader(opts pulsar.ReaderOptions) (pulsar.Reader, error) {
+	args := m.Called(opts)
+	var r pulsar.Reader
+	if v := args.Get(0); v != nil {
+		r = v.(pulsar.Reader)
+	}
+	return r, args.Error(1)
+}
+
+func (m *mockPulsarClient) CreateTableView(opts pulsar.TableViewOptions) (pulsar.TableView, error) {
+	args := m.Called(opts)
+	var v pulsar.TableView
+	if got := args.Get(0); got != nil {
+		v = got.(pulsar.TableView)
+	}
+	return v, args.Error(1)
+}
+
+func (m *mockPulsarClient) TopicPartitions(topic string) ([]string, error) {
+	args := m.Called(topic)
+	var parts []string
+	if v := args.Get(0); v != nil {
+		parts = v.([]string)
+	}
+	return parts, args.Error(1)
+}
+
+func (m *mockPulsarClient) NewTransaction(d time.Duration) (pulsar.Transaction, error) {
+	args := m.Called(d)
+	var tx pulsar.Transaction
+	if v := args.Get(0); v != nil {
+		tx = v.(pulsar.Transaction)
+	}
+	return tx, args.Error(1)
+}
+
+func (m *mockPulsarClient) Close() {
+	m.Called()
+}
+
+func (m *mockPulsarClient) createProducerOptions() []pulsar.ProducerOptions {
+	var out []pulsar.ProducerOptions
+	for _, c := range m.Calls {
+		if c.Method == "CreateProducer" {
+			out = append(out, c.Arguments.Get(0).(pulsar.ProducerOptions))
+		}
+	}
+	return out
+}
 
 // mockProducer is a testify mock for the producer interface. SendAsync invokes
 // the callback synchronously (as the SDK does) with the configured send error
