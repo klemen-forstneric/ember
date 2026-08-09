@@ -82,10 +82,14 @@ func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.Mars
 	return itemToEntity(out.Item)
 }
 
-func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter, s ember.Sort, _ ember.Page) ([]*ember.MarshaledEntity, error) {
+func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter, s ember.Sort, p ember.Page) ([]*ember.MarshaledEntity, error) {
 	if s.Path != "" {
 		return nil, ember.ErrUnsupportedSort
 	}
+	if p.Offset > 0 {
+		return nil, fmt.Errorf("%w: offset", ember.ErrUnsupportedPage)
+	}
+
 	filter, hasFilter, err := buildFilter(f)
 	if err != nil {
 		return nil, err
@@ -101,13 +105,24 @@ func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter,
 		return nil, err
 	}
 
-	paginator := dynamodb.NewQueryPaginator(r.client, &dynamodb.QueryInput{
+	input := &dynamodb.QueryInput{
 		TableName:                 aws.String(r.table),
 		KeyConditionExpression:    expr.KeyCondition(),
-		FilterExpression:          expr.Filter(), // nil when there is no filter
+		FilterExpression:          expr.Filter(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-	})
+	}
+	if !p.Cursor.IsZero() {
+		input.ExclusiveStartKey = map[string]types.AttributeValue{
+			"type": &types.AttributeValueMemberS{Value: typ},
+			"id":   &types.AttributeValueMemberS{Value: p.Cursor.ID},
+		}
+	}
+	if p.Limit > 0 {
+		input.Limit = aws.Int32(int32(p.Limit))
+	}
+
+	paginator := dynamodb.NewQueryPaginator(r.client, input)
 
 	var out []*ember.MarshaledEntity
 	for paginator.HasMorePages() {
@@ -122,7 +137,14 @@ func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter,
 			}
 			out = append(out, e)
 		}
+		if p.Limit > 0 && len(out) >= p.Limit {
+			break
+		}
 	}
+	if p.Limit > 0 && len(out) > p.Limit {
+		out = out[:p.Limit]
+	}
+
 	return out, nil
 }
 

@@ -1,6 +1,7 @@
 package dynamo
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -223,3 +224,19 @@ func TestBuildFilterNotOfNe(t *testing.T) {
 
 // Compile-time assertion that the repository satisfies the interface.
 var _ ember.EntityRepository = (*EntityRepository)(nil)
+
+func TestListRejectsOffset(t *testing.T) {
+	repo := NewEntityRepository(nil, "entities")
+
+	_, err := repo.List(context.Background(), "order", nil, ember.Unsorted(), ember.Limit(10).Skip(10))
+
+	require.ErrorIs(t, err, ember.ErrUnsupportedPage)
+}
+
+func TestListRejectsSortedCursor(t *testing.T) {
+	repo := NewEntityRepository(nil, "entities")
+
+	_, err := repo.List(context.Background(), "order", nil, ember.Asc("seq"), ember.Limit(10).After(int64(1), "x"))
+
+	require.ErrorIs(t, err, ember.ErrUnsupportedSort)
+}
