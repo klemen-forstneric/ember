@@ -11,9 +11,8 @@ import (
 )
 
 var (
-	ErrInvalidPage     = errors.New("ember: invalid page")
-	ErrInvalidCursor   = errors.New("ember: invalid cursor")
-	ErrUnsupportedPage = errors.New("ember: unsupported page")
+	ErrInvalidPage   = errors.New("ember: invalid page")
+	ErrInvalidCursor = errors.New("ember: invalid cursor")
 )
 
 // Cursor

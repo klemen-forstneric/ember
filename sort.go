@@ -51,7 +51,6 @@ func DescNum(path string) Sort {
 	return Sort{Path: path, Direction: Descending, Ordering: Numeric}
 }
 
-var ErrUnsupportedSort = errors.New("ember: unsupported sort")
 var ErrInvalidSort = errors.New("ember: invalid sort")
 
 func (s Sort) Validate() error {
