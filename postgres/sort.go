@@ -32,13 +32,13 @@ func orderBy(s ember.Sort, paged bool) []string {
 }
 
 func seekPredicate(s ember.Sort, c ember.Cursor) (sq.Sqlizer, error) {
+	if s.Path == "" {
+		return sq.Expr("id > ?", c.ID), nil
+	}
+
 	op := ">"
 	if s.Direction == ember.Descending {
 		op = "<"
-	}
-
-	if s.Path == "" {
-		return sq.Expr("id > ?", c.ID), nil
 	}
 
 	if c.Value == nil {
@@ -47,7 +47,7 @@ func seekPredicate(s ember.Sort, c ember.Cursor) (sq.Sqlizer, error) {
 
 	v, err := normalizeValue(c.Value)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ember.ErrInvalidCursor, err)
 	}
 
 	placeholder := "?"

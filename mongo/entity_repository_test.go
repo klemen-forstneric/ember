@@ -135,11 +135,11 @@ func TestListPagingLimitAndSkip(t *testing.T) {
 	repo, err := NewEntityRepository(ctx, col)
 	require.NoError(t, err)
 
-	first, err := repo.List(ctx, "fake", nil, ember.Asc("n").Numeric(), ember.Limit(2))
+	first, err := repo.List(ctx, "fake", nil, ember.AscNum("n"), ember.Limit(2))
 	require.NoError(t, err)
 	require.Equal(t, []float64{1, 2}, nNumbers(first))
 
-	second, err := repo.List(ctx, "fake", nil, ember.Asc("n").Numeric(), ember.Limit(2).Skip(2))
+	second, err := repo.List(ctx, "fake", nil, ember.AscNum("n"), ember.Limit(2).Skip(2))
 	require.NoError(t, err)
 	require.Equal(t, []float64{3}, nNumbers(second))
 }
@@ -183,7 +183,7 @@ func TestListPagingKeysetAcrossTie(t *testing.T) {
 	repo, err := NewEntityRepository(ctx, col)
 	require.NoError(t, err)
 
-	sort := ember.Asc("n").Numeric()
+	sort := ember.AscNum("n")
 	var seen []string
 	page := ember.Limit(2)
 	for i := 0; i < 5; i++ {
@@ -237,7 +237,7 @@ func TestListPagingSortedCursorNeedsValue(t *testing.T) {
 	repo, err := NewEntityRepository(ctx, col)
 	require.NoError(t, err)
 
-	_, err = repo.List(ctx, "fake", nil, ember.Asc("n").Numeric(), ember.Limit(2).After(nil, "idA"))
+	_, err = repo.List(ctx, "fake", nil, ember.AscNum("n"), ember.Limit(2).After(nil, "idA"))
 	require.ErrorIs(t, err, ember.ErrInvalidCursor)
 }
 

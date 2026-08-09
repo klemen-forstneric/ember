@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 )
@@ -31,6 +32,13 @@ type cursorWire struct {
 }
 
 func (c Cursor) MarshalText() ([]byte, error) {
+	if c.ID == "" {
+		if c.Value != nil {
+			return nil, fmt.Errorf("%w: value without id", ErrInvalidCursor)
+		}
+		return nil, nil
+	}
+
 	w := cursorWire{ID: c.ID}
 	switch x := c.Value.(type) {
 	case nil:
@@ -40,7 +48,17 @@ func (c Cursor) MarshalText() ([]byte, error) {
 		w.Kind, w.Value = "s", x.UTC().Format(time.RFC3339Nano)
 	case bool:
 		w.Kind, w.Value = "b", strconv.FormatBool(x)
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+	case uint:
+		if uint64(x) > math.MaxInt64 {
+			return nil, fmt.Errorf("%w: value %d exceeds int64", ErrInvalidCursor, x)
+		}
+		w.Kind, w.Value = "n", strconv.FormatUint(uint64(x), 10)
+	case uint64:
+		if x > math.MaxInt64 {
+			return nil, fmt.Errorf("%w: value %d exceeds int64", ErrInvalidCursor, x)
+		}
+		w.Kind, w.Value = "n", strconv.FormatUint(x, 10)
+	case int, int8, int16, int32, int64, uint8, uint16, uint32:
 		w.Kind, w.Value = "n", fmt.Sprintf("%d", x)
 	case float32, float64:
 		w.Kind, w.Value = "f", fmt.Sprintf("%v", x)
@@ -57,6 +75,11 @@ func (c Cursor) MarshalText() ([]byte, error) {
 }
 
 func (c *Cursor) UnmarshalText(b []byte) error {
+	if len(b) == 0 {
+		*c = Cursor{}
+		return nil
+	}
+
 	raw, err := base64.RawURLEncoding.DecodeString(string(b))
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidCursor, err)

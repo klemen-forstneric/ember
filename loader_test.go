@@ -82,10 +82,10 @@ func (s *EntityLoaderSuite) TestListPagePassesPageThrough() {
 	f := Eq("k", "v")
 	p := Limit(2).After(int64(7), "1")
 	m1 := &MarshaledEntity{ID: "2", Type: "fake"}
-	s.repo.On("List", mock.Anything, "fake", f, Asc("seq").Numeric(), p).Return([]*MarshaledEntity{m1}, nil)
+	s.repo.On("List", mock.Anything, "fake", f, AscNum("seq"), p).Return([]*MarshaledEntity{m1}, nil)
 	s.marshaler.On("Unmarshal", mock.Anything, m1).Return(newFakeEntity("2"), nil)
 
-	got, err := s.loader.ListPage(s.ctx, f, Asc("seq").Numeric(), p)
+	got, err := s.loader.ListPage(s.ctx, f, AscNum("seq"), p)
 
 	s.Require().NoError(err)
 	s.Require().Len(got, 1)

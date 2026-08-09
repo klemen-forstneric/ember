@@ -35,14 +35,20 @@ func Asc(path string) Sort { return Sort{Path: path, Direction: Ascending} }
 
 func Desc(path string) Sort { return Sort{Path: path, Direction: Descending} }
 
-func (s Sort) Lexical() Sort {
-	s.Ordering = Lexical
-	return s
+func AscLex(path string) Sort {
+	return Sort{Path: path, Direction: Ascending, Ordering: Lexical}
 }
 
-func (s Sort) Numeric() Sort {
-	s.Ordering = Numeric
-	return s
+func AscNum(path string) Sort {
+	return Sort{Path: path, Direction: Ascending, Ordering: Numeric}
+}
+
+func DescLex(path string) Sort {
+	return Sort{Path: path, Direction: Descending, Ordering: Lexical}
+}
+
+func DescNum(path string) Sort {
+	return Sort{Path: path, Direction: Descending, Ordering: Numeric}
 }
 
 var ErrUnsupportedSort = errors.New("ember: unsupported sort")
@@ -53,7 +59,7 @@ func (s Sort) Validate() error {
 		return nil
 	}
 	if s.Ordering == orderingUndeclared {
-		return fmt.Errorf("%w: path %q needs an explicit Lexical() or Numeric() ordering", ErrInvalidSort, s.Path)
+		return fmt.Errorf("%w: path %q needs a declared ordering (AscLex/AscNum/DescLex/DescNum)", ErrInvalidSort, s.Path)
 	}
 	return nil
 }

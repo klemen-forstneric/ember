@@ -2,6 +2,7 @@ package ember
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
@@ -76,11 +77,30 @@ func TestCursorTextRoundTrip(t *testing.T) {
 func TestCursorTextRejectsGarbage(t *testing.T) {
 	var c Cursor
 	require.ErrorIs(t, c.UnmarshalText([]byte("not base64 $$$")), ErrInvalidCursor)
-	require.ErrorIs(t, c.UnmarshalText([]byte("")), ErrInvalidCursor)
+}
+
+func TestCursorZeroRoundTripsThroughEmpty(t *testing.T) {
+	b, err := Cursor{}.MarshalText()
+	require.NoError(t, err)
+	assert.Empty(t, b)
+
+	c := Cursor{Value: int64(7), ID: "x"}
+	require.NoError(t, c.UnmarshalText(b))
+	assert.Equal(t, Cursor{}, c)
 }
 
 func TestCursorMarshalRejectsUnsupportedValue(t *testing.T) {
 	_, err := Cursor{Value: []string{"a"}, ID: "x"}.MarshalText()
+	require.ErrorIs(t, err, ErrInvalidCursor)
+}
+
+func TestCursorMarshalRejectsValueWithoutID(t *testing.T) {
+	_, err := Cursor{Value: "a"}.MarshalText()
+	require.ErrorIs(t, err, ErrInvalidCursor)
+}
+
+func TestCursorMarshalRejectsUint64BeyondInt64(t *testing.T) {
+	_, err := Cursor{Value: uint64(math.MaxInt64) + 1, ID: "x"}.MarshalText()
 	require.ErrorIs(t, err, ErrInvalidCursor)
 }
 
@@ -95,4 +115,12 @@ func TestCursorSurvivesJSON(t *testing.T) {
 	var got resp
 	require.NoError(t, json.Unmarshal(b, &got))
 	assert.Equal(t, Cursor{Value: int64(42), ID: "pay_abc"}, got.Next)
+
+	zero, err := json.Marshal(resp{})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"next":""}`, string(zero))
+
+	back := resp{Next: Cursor{Value: int64(42), ID: "pay_abc"}}
+	require.NoError(t, json.Unmarshal(zero, &back))
+	assert.Equal(t, Cursor{}, back.Next)
 }

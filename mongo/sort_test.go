@@ -91,11 +91,11 @@ func TestListSortNumeric(t *testing.T) {
 	repo, err := NewEntityRepository(ctx, col)
 	require.NoError(t, err)
 
-	asc, err := repo.List(ctx, "fake", nil, ember.Asc("n").Numeric(), ember.Unpaged())
+	asc, err := repo.List(ctx, "fake", nil, ember.AscNum("n"), ember.Unpaged())
 	require.NoError(t, err)
 	require.Equal(t, []float64{2, 9, 10}, nNumbers(asc))
 
-	desc, err := repo.List(ctx, "fake", nil, ember.Desc("n").Numeric(), ember.Unpaged())
+	desc, err := repo.List(ctx, "fake", nil, ember.DescNum("n"), ember.Unpaged())
 	require.NoError(t, err)
 	require.Equal(t, []float64{10, 9, 2}, nNumbers(desc))
 }

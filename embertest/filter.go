@@ -67,17 +67,15 @@ func matches(f ember.Filter, m *ember.MarshaledEntity) (bool, error) {
 	}
 }
 
-// lookup resolves a filter path to a value from the entity. Reserved paths read
-// top-level fields; others read a dotted path from the data document. The bool
-// is false when the path is absent or JSON null.
+var reservedPaths = map[string]func(*ember.MarshaledEntity) any{
+	"id":      func(m *ember.MarshaledEntity) any { return m.ID },
+	"type":    func(m *ember.MarshaledEntity) any { return m.Type },
+	"version": func(m *ember.MarshaledEntity) any { return float64(m.Version.Value()) },
+}
+
 func lookup(m *ember.MarshaledEntity, path string) (any, bool, error) {
-	switch path {
-	case "id":
-		return m.ID, true, nil
-	case "type":
-		return m.Type, true, nil
-	case "version":
-		return float64(m.Version.Value()), true, nil
+	if read, ok := reservedPaths[path]; ok {
+		return read(m), true, nil
 	}
 
 	var data map[string]any

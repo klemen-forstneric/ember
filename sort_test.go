@@ -10,21 +10,22 @@ import (
 func TestSortConstructors(t *testing.T) {
 	assert.Equal(t, Sort{Path: "created_at", Direction: Ascending}, Asc("created_at"))
 	assert.Equal(t, Sort{Path: "created_at", Direction: Descending}, Desc("created_at"))
-	assert.Equal(t, "", Sort{}.Path) // zero value = unordered
+	assert.Equal(t, "", Sort{}.Path)
 	assert.Equal(t, Sort{}, Unsorted())
 	assert.Equal(t, "", Unsorted().Path)
 }
 
-func TestSortOrdering(t *testing.T) {
-	assert.Equal(t, Sort{Path: "seq", Direction: Ascending, Ordering: Numeric}, Asc("seq").Numeric())
-	assert.Equal(t, Sort{Path: "seq", Direction: Descending, Ordering: Numeric}, Desc("seq").Numeric())
-	assert.Equal(t, Asc("seq").Lexical(), Asc("seq").Numeric().Lexical())
+func TestSortOrderingConstructors(t *testing.T) {
+	assert.Equal(t, Sort{Path: "created_at", Direction: Ascending, Ordering: Lexical}, AscLex("created_at"))
+	assert.Equal(t, Sort{Path: "created_at", Direction: Descending, Ordering: Lexical}, DescLex("created_at"))
+	assert.Equal(t, Sort{Path: "seq", Direction: Ascending, Ordering: Numeric}, AscNum("seq"))
+	assert.Equal(t, Sort{Path: "seq", Direction: Descending, Ordering: Numeric}, DescNum("seq"))
 }
 
 func TestSortValidate(t *testing.T) {
 	require.NoError(t, Unsorted().Validate())
-	require.NoError(t, Asc("seq").Numeric().Validate())
-	require.NoError(t, Desc("created_at").Lexical().Validate())
+	require.NoError(t, AscNum("seq").Validate())
+	require.NoError(t, DescLex("created_at").Validate())
 
 	require.NoError(t, Asc("id").Validate())
 	require.NoError(t, Asc("type").Validate())
@@ -38,6 +39,6 @@ func TestSortValidate(t *testing.T) {
 func TestSortOrderingIsUndeclaredByDefault(t *testing.T) {
 	assert.NotEqual(t, Lexical, Asc("seq").Ordering)
 	assert.NotEqual(t, Numeric, Asc("seq").Ordering)
-	assert.Equal(t, Lexical, Asc("seq").Lexical().Ordering)
-	assert.Equal(t, Numeric, Asc("seq").Numeric().Ordering)
+	assert.Equal(t, Lexical, AscLex("seq").Ordering)
+	assert.Equal(t, Numeric, AscNum("seq").Ordering)
 }

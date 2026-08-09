@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,13 +17,13 @@ func TestOrderBy(t *testing.T) {
 		want []string
 	}{
 		{"unsorted", ember.Unsorted(), nil},
-		{"lexical asc", ember.Asc("created_at"), []string{"data#>>'{created_at}' ASC"}},
-		{"lexical desc", ember.Desc("created_at"), []string{"data#>>'{created_at}' DESC"}},
-		{"numeric asc", ember.Asc("seq").Numeric(), []string{"(data#>>'{seq}')::numeric ASC"}},
-		{"numeric desc", ember.Desc("seq").Numeric(), []string{"(data#>>'{seq}')::numeric DESC"}},
+		{"lexical asc", ember.AscLex("created_at"), []string{"data#>>'{created_at}' ASC"}},
+		{"lexical desc", ember.DescLex("created_at"), []string{"data#>>'{created_at}' DESC"}},
+		{"numeric asc", ember.AscNum("seq"), []string{"(data#>>'{seq}')::numeric ASC"}},
+		{"numeric desc", ember.DescNum("seq"), []string{"(data#>>'{seq}')::numeric DESC"}},
 		{"nested path", ember.Asc("job.id"), []string{"data#>>'{job,id}' ASC"}},
 		{"reserved id", ember.Asc("id"), []string{"id ASC"}},
-		{"reserved version ignores ordering", ember.Asc("version").Numeric(), []string{"version ASC"}},
+		{"reserved version ignores ordering", ember.AscNum("version"), []string{"version ASC"}},
 	}
 
 	for _, tt := range tests {
@@ -35,7 +36,7 @@ func TestOrderBy(t *testing.T) {
 func TestOrderByPagedAppendsTiebreak(t *testing.T) {
 	assert.Equal(t, []string{"id ASC"}, orderBy(ember.Unsorted(), true))
 	assert.Equal(t, []string{"data#>>'{created_at}' ASC", "id ASC"}, orderBy(ember.Asc("created_at"), true))
-	assert.Equal(t, []string{"(data#>>'{seq}')::numeric DESC", "id DESC"}, orderBy(ember.Desc("seq").Numeric(), true))
+	assert.Equal(t, []string{"(data#>>'{seq}')::numeric DESC", "id DESC"}, orderBy(ember.DescNum("seq"), true))
 }
 
 func TestSeekPredicate(t *testing.T) {
@@ -55,14 +56,14 @@ func TestSeekPredicate(t *testing.T) {
 		},
 		{
 			"lexical asc",
-			ember.Asc("settle_by"),
+			ember.AscLex("settle_by"),
 			ember.Cursor{Value: "2026-08-09", ID: "pay_abc"},
 			"(data#>>'{settle_by}', id) > (?, ?)",
 			[]any{"2026-08-09", "pay_abc"},
 		},
 		{
 			"numeric desc",
-			ember.Desc("seq").Numeric(),
+			ember.DescNum("seq"),
 			ember.Cursor{Value: int64(7), ID: "m1"},
 			"((data#>>'{seq}')::numeric, id) < (?::numeric, ?)",
 			[]any{int64(7), "m1"},
@@ -83,7 +84,12 @@ func TestSeekPredicate(t *testing.T) {
 }
 
 func TestSeekPredicateSortedCursorNeedsValue(t *testing.T) {
-	_, err := seekPredicate(ember.Asc("seq").Numeric(), ember.Cursor{ID: "m1"})
+	_, err := seekPredicate(ember.AscNum("seq"), ember.Cursor{ID: "m1"})
+	require.ErrorIs(t, err, ember.ErrInvalidCursor)
+}
+
+func TestSeekPredicateCursorValueInvalidWrapsErrInvalidCursor(t *testing.T) {
+	_, err := seekPredicate(ember.AscNum("n"), ember.Cursor{Value: time.Duration(1), ID: "m1"})
 	require.ErrorIs(t, err, ember.ErrInvalidCursor)
 }
 

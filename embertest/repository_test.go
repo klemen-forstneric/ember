@@ -64,6 +64,18 @@ func TestListFilterEqAndAnd(t *testing.T) {
 	assert.Equal(t, "1", got[0].ID)
 }
 
+func TestListFilterMatchesAnyIntegerWidth(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, me("1", "t", 1, `{"n":5}`)))
+
+	for _, want := range []any{int32(5), int8(5), uint(5), uint64(5)} {
+		got, err := r.List(ctx, "t", ember.Eq("n", want), ember.Unsorted(), ember.Unpaged())
+		require.NoError(t, err)
+		assert.Equal(t, []string{"1"}, ids(got), "operand %T", want)
+	}
+}
+
 func TestListSort(t *testing.T) {
 	r := New()
 	ctx := context.Background()
@@ -103,20 +115,39 @@ func TestListSortLexicalVsNumeric(t *testing.T) {
 	require.NoError(t, r.Save(ctx, me("b", "t", 1, `{"n":10}`)))
 	require.NoError(t, r.Save(ctx, me("c", "t", 1, `{"n":2}`)))
 
-	lex, err := r.List(ctx, "t", nil, ember.Asc("n"), ember.Unpaged())
+	lex, err := r.List(ctx, "t", nil, ember.AscLex("n"), ember.Unpaged())
 	require.NoError(t, err)
 	require.Len(t, lex, 3)
 	assert.Equal(t, []string{"b", "c", "a"}, []string{lex[0].ID, lex[1].ID, lex[2].ID})
 
-	num, err := r.List(ctx, "t", nil, ember.Asc("n").Numeric(), ember.Unpaged())
+	num, err := r.List(ctx, "t", nil, ember.AscNum("n"), ember.Unpaged())
 	require.NoError(t, err)
 	require.Len(t, num, 3)
 	assert.Equal(t, []string{"c", "a", "b"}, []string{num[0].ID, num[1].ID, num[2].ID})
 
-	desc, err := r.List(ctx, "t", nil, ember.Desc("n").Numeric(), ember.Unpaged())
+	desc, err := r.List(ctx, "t", nil, ember.DescNum("n"), ember.Unpaged())
 	require.NoError(t, err)
 	require.Len(t, desc, 3)
 	assert.Equal(t, []string{"b", "a", "c"}, []string{desc[0].ID, desc[1].ID, desc[2].ID})
+}
+
+func TestListSortReservedPathIgnoresOrdering(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	for v := uint64(1); v <= 9; v++ {
+		require.NoError(t, r.Save(ctx, me("a", "t", v, `{}`)))
+	}
+	for v := uint64(1); v <= 10; v++ {
+		require.NoError(t, r.Save(ctx, me("b", "t", v, `{}`)))
+	}
+
+	asc, err := r.List(ctx, "t", nil, ember.Asc("version"), ember.Unpaged())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, ids(asc))
+
+	desc, err := r.List(ctx, "t", nil, ember.Desc("version"), ember.Unpaged())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b", "a"}, ids(desc))
 }
 
 // Data returned from the store must not alias stored state: mutating a returned
@@ -143,7 +174,7 @@ func TestListPagingLimitAndOffset(t *testing.T) {
 	require.NoError(t, r.Save(ctx, me("b", "t", 1, `{"n":2}`)))
 	require.NoError(t, r.Save(ctx, me("c", "t", 1, `{"n":3}`)))
 
-	sort := ember.Asc("n").Numeric()
+	sort := ember.AscNum("n")
 
 	first, err := r.List(ctx, "t", nil, sort, ember.Limit(2))
 	require.NoError(t, err)
@@ -166,7 +197,7 @@ func TestListPagingKeysetAcrossTie(t *testing.T) {
 	require.NoError(t, r.Save(ctx, me("idC", "t", 1, `{"n":5}`)))
 	require.NoError(t, r.Save(ctx, me("idD", "t", 1, `{"n":6}`)))
 
-	sort := ember.Asc("n").Numeric()
+	sort := ember.AscNum("n")
 
 	first, err := r.List(ctx, "t", nil, sort, ember.Limit(2))
 	require.NoError(t, err)
@@ -220,7 +251,7 @@ func TestListPagingSortedCursorNeedsValue(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, r.Save(ctx, me("a", "t", 1, `{"n":1}`)))
 
-	_, err := r.List(ctx, "t", nil, ember.Asc("n").Numeric(), ember.Limit(2).After(nil, "a"))
+	_, err := r.List(ctx, "t", nil, ember.AscNum("n"), ember.Limit(2).After(nil, "a"))
 	require.ErrorIs(t, err, ember.ErrInvalidCursor)
 }
 
@@ -229,8 +260,21 @@ func TestListPagingSortedCursorRejectsUnsupportedValue(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, r.Save(ctx, me("a", "t", 1, `{"n":1}`)))
 
-	_, err := r.List(ctx, "t", nil, ember.Asc("n").Numeric(), ember.Limit(2).After(time.Second, "a"))
+	_, err := r.List(ctx, "t", nil, ember.AscNum("n"), ember.Limit(2).After(time.Second, "a"))
 	require.ErrorIs(t, err, ember.ErrInvalidCursor)
+}
+
+func TestListPagingSortedCursorAcceptsAnyIntegerWidth(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, me("a", "t", 1, `{"n":1}`)))
+	require.NoError(t, r.Save(ctx, me("b", "t", 1, `{"n":2}`)))
+
+	for _, after := range []any{int32(1), uint64(1)} {
+		got, err := r.List(ctx, "t", nil, ember.AscNum("n"), ember.Limit(2).After(after, "a"))
+		require.NoError(t, err, "cursor value %T", after)
+		assert.Equal(t, []string{"b"}, ids(got), "cursor value %T", after)
+	}
 }
 
 func TestListPagingMissingPathTiebreakIsDeterministic(t *testing.T) {
@@ -241,7 +285,7 @@ func TestListPagingMissingPathTiebreakIsDeterministic(t *testing.T) {
 	require.NoError(t, r.Save(ctx, me("m1", "t", 1, `{}`)))
 	require.NoError(t, r.Save(ctx, me("m2", "t", 1, `{}`)))
 
-	sort := ember.Asc("n").Numeric()
+	sort := ember.AscNum("n")
 
 	var walk []string
 	for i := 0; i < 4; i++ {
@@ -274,7 +318,7 @@ func TestListPagingDescendingKeysetAcrossTie(t *testing.T) {
 	require.NoError(t, r.Save(ctx, me("idC", "t", 1, `{"n":5}`)))
 	require.NoError(t, r.Save(ctx, me("idD", "t", 1, `{"n":6}`)))
 
-	sort := ember.Desc("n").Numeric()
+	sort := ember.DescNum("n")
 
 	all, err := r.List(ctx, "t", nil, sort, ember.Limit(4))
 	require.NoError(t, err)

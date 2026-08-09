@@ -2,6 +2,7 @@ package embertest
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"time"
@@ -26,10 +27,10 @@ func applySort(items []*ember.MarshaledEntity, s ember.Sort, paged bool) {
 			}
 			return paged && idLess(items[i], items[j], s.Direction)
 		}
-		if lessThan(vi, vj, s.Ordering) {
+		if lessThan(vi, vj, s) {
 			return s.Direction != ember.Descending
 		}
-		if lessThan(vj, vi, s.Ordering) {
+		if lessThan(vj, vi, s) {
 			return s.Direction == ember.Descending
 		}
 		return paged && idLess(items[i], items[j], s.Direction)
@@ -76,18 +77,19 @@ func afterCursor(m *ember.MarshaledEntity, s ember.Sort, c ember.Cursor) bool {
 		return false
 	}
 
-	if lessThan(v, c.Value, s.Ordering) {
+	if lessThan(v, c.Value, s) {
 		return s.Direction == ember.Descending
 	}
-	if lessThan(c.Value, v, s.Ordering) {
+	if lessThan(c.Value, v, s) {
 		return s.Direction != ember.Descending
 	}
 
 	return idAfter
 }
 
-func lessThan(a, b any, o ember.Ordering) bool {
-	if o == ember.Numeric {
+func lessThan(a, b any, s ember.Sort) bool {
+	_, reserved := reservedPaths[s.Path]
+	if reserved || s.Ordering == ember.Numeric {
 		c, ok := orderJSON(a, b)
 		return ok && c < 0
 	}
@@ -174,10 +176,10 @@ func toFloat(v any) (float64, bool) {
 		return x, true
 	case float32:
 		return float64(x), true
-	case int:
-		return float64(x), true
-	case int64:
-		return float64(x), true
+	case int, int8, int16, int32, int64:
+		return float64(reflect.ValueOf(x).Int()), true
+	case uint, uint8, uint16, uint32, uint64:
+		return float64(reflect.ValueOf(x).Uint()), true
 	}
 	return 0, false
 }
