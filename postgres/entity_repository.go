@@ -92,7 +92,11 @@ func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter,
 		return nil, err
 	}
 
-	qb := psql.Select("id", "version", "data").From(r.table).Where(sq.Eq{"type": typ})
+	qb := psql.
+		Select("id", "version", "data").
+		From(r.table).
+		Where(sq.Eq{"type": typ})
+
 	if pred != nil {
 		qb = qb.Where(pred) // multiple Where clauses are AND-ed together
 	}
