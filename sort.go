@@ -1,6 +1,9 @@
 package ember
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Direction
 type Direction int
@@ -14,7 +17,8 @@ const (
 type Ordering int
 
 const (
-	Lexical Ordering = iota
+	orderingUndeclared Ordering = iota
+	Lexical
 	Numeric
 )
 
@@ -42,3 +46,23 @@ func (s Sort) Numeric() Sort {
 }
 
 var ErrUnsupportedSort = errors.New("ember: unsupported sort")
+var ErrInvalidSort = errors.New("ember: invalid sort")
+
+func (s Sort) Validate() error {
+	if s.Path == "" || reservedPath(s.Path) {
+		return nil
+	}
+	if s.Ordering == orderingUndeclared {
+		return fmt.Errorf("%w: path %q needs an explicit Lexical() or Numeric() ordering", ErrInvalidSort, s.Path)
+	}
+	return nil
+}
+
+func reservedPath(path string) bool {
+	switch path {
+	case "id", "type", "version":
+		return true
+	default:
+		return false
+	}
+}
