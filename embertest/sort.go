@@ -21,7 +21,10 @@ func applySort(items []*ember.MarshaledEntity, s ember.Sort, paged bool) {
 		vi, oki, _ := lookup(items[i], s.Path)
 		vj, okj, _ := lookup(items[j], s.Path)
 		if !oki || !okj {
-			return oki && !okj
+			if oki != okj {
+				return oki
+			}
+			return paged && idLess(items[i], items[j], s.Direction)
 		}
 		if lessThan(vi, vj, s.Ordering) {
 			return s.Direction != ember.Descending
@@ -29,19 +32,23 @@ func applySort(items []*ember.MarshaledEntity, s ember.Sort, paged bool) {
 		if lessThan(vj, vi, s.Ordering) {
 			return s.Direction == ember.Descending
 		}
-		if !paged {
-			return false
-		}
-		if s.Direction == ember.Descending {
-			return items[j].ID < items[i].ID
-		}
-		return items[i].ID < items[j].ID
+		return paged && idLess(items[i], items[j], s.Direction)
 	})
+}
+
+func idLess(a, b *ember.MarshaledEntity, d ember.Direction) bool {
+	if d == ember.Descending {
+		return b.ID < a.ID
+	}
+	return a.ID < b.ID
 }
 
 func seek(items []*ember.MarshaledEntity, s ember.Sort, c ember.Cursor) ([]*ember.MarshaledEntity, error) {
 	if s.Path != "" && c.Value == nil {
 		return nil, fmt.Errorf("%w: sorted cursor requires a value", ember.ErrInvalidCursor)
+	}
+	if s.Path != "" && valueKey(c.Value) == "?" {
+		return nil, fmt.Errorf("%w: value type %T", ember.ErrInvalidCursor, c.Value)
 	}
 
 	out := make([]*ember.MarshaledEntity, 0, len(items))

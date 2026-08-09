@@ -3,6 +3,7 @@ package embertest
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/klemen-forstneric/ember"
 	"github.com/stretchr/testify/assert"
@@ -221,4 +222,61 @@ func TestListPagingSortedCursorNeedsValue(t *testing.T) {
 
 	_, err := r.List(ctx, "t", nil, ember.Asc("n").Numeric(), ember.Limit(2).After(nil, "a"))
 	require.ErrorIs(t, err, ember.ErrInvalidCursor)
+}
+
+func TestListPagingSortedCursorRejectsUnsupportedValue(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, me("a", "t", 1, `{"n":1}`)))
+
+	_, err := r.List(ctx, "t", nil, ember.Asc("n").Numeric(), ember.Limit(2).After(time.Second, "a"))
+	require.ErrorIs(t, err, ember.ErrInvalidCursor)
+}
+
+func TestListPagingMissingPathTiebreakIsDeterministic(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, me("n1", "t", 1, `{"n":1}`)))
+	require.NoError(t, r.Save(ctx, me("n2", "t", 1, `{"n":2}`)))
+	require.NoError(t, r.Save(ctx, me("m1", "t", 1, `{}`)))
+	require.NoError(t, r.Save(ctx, me("m2", "t", 1, `{}`)))
+
+	sort := ember.Asc("n").Numeric()
+
+	var walk []string
+	for i := 0; i < 4; i++ {
+		page, err := r.List(ctx, "t", nil, sort, ember.Limit(1).Skip(i))
+		require.NoError(t, err)
+		walk = append(walk, ids(page)...)
+	}
+	assert.Equal(t, []string{"n1", "n2", "m1", "m2"}, walk)
+
+	for i := 0; i < 5; i++ {
+		page, err := r.List(ctx, "t", nil, sort, ember.Limit(1).Skip(i))
+		require.NoError(t, err)
+		if i < len(walk) {
+			assert.Equal(t, []string{walk[i]}, ids(page))
+		} else {
+			assert.Empty(t, page)
+		}
+	}
+
+	past, err := r.List(ctx, "t", nil, sort, ember.Limit(2).After(float64(2), "n2"))
+	require.NoError(t, err)
+	assert.Empty(t, past)
+}
+
+func TestListPagingDescendingKeysetAcrossTie(t *testing.T) {
+	r := New()
+	ctx := context.Background()
+	require.NoError(t, r.Save(ctx, me("idA", "t", 1, `{"n":5}`)))
+	require.NoError(t, r.Save(ctx, me("idB", "t", 1, `{"n":5}`)))
+	require.NoError(t, r.Save(ctx, me("idC", "t", 1, `{"n":5}`)))
+	require.NoError(t, r.Save(ctx, me("idD", "t", 1, `{"n":6}`)))
+
+	sort := ember.Desc("n").Numeric()
+
+	all, err := r.List(ctx, "t", nil, sort, ember.Limit(4))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"idD", "idC", "idB", "idA"}, ids(all))
 }
