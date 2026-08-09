@@ -60,7 +60,7 @@ func (r *EntityRepository) Get(_ context.Context, typ, id string) (*ember.Marsha
 	return nil, ember.ErrEntityNotFound
 }
 
-func (r *EntityRepository) List(_ context.Context, typ string, f ember.Filter, s ember.Sort) ([]*ember.MarshaledEntity, error) {
+func (r *EntityRepository) List(_ context.Context, typ string, f ember.Filter, s ember.Sort, _ ember.Page) ([]*ember.MarshaledEntity, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

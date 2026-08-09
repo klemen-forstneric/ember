@@ -96,7 +96,7 @@ func (s *EntityRepositorySuite) TestListIsScopedToTypeAndCarriesEntityID() {
 	s.Require().NoError(s.repo.Save(ctx, marshaled("order", "1", 0, `{"n":"a"}`)))
 	s.Require().NoError(s.repo.Save(ctx, marshaled("offer", "1", 0, `{"n":"b"}`)))
 
-	got, err := s.repo.List(ctx, "order", nil, ember.Sort{})
+	got, err := s.repo.List(ctx, "order", nil, ember.Sort{}, ember.Unpaged())
 	s.Require().NoError(err)
 	s.Require().Len(got, 1)
 	s.Equal("1", got[0].ID)
@@ -109,7 +109,7 @@ func (s *EntityRepositorySuite) TestListFiltersByEntityID() {
 	s.Require().NoError(s.repo.Save(ctx, marshaled("order", "1", 0, `{"n":"a"}`)))
 	s.Require().NoError(s.repo.Save(ctx, marshaled("order", "2", 0, `{"n":"b"}`)))
 
-	got, err := s.repo.List(ctx, "order", ember.Eq("id", "2"), ember.Sort{})
+	got, err := s.repo.List(ctx, "order", ember.Eq("id", "2"), ember.Sort{}, ember.Unpaged())
 	s.Require().NoError(err)
 	s.Require().Len(got, 1)
 	s.Equal("2", got[0].ID)

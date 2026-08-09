@@ -55,7 +55,7 @@ func (s *EntityStoreSuite) TestListDelegatesToLoader() {
 	e1 := newFakeEntity("1")
 	e1.Name = "alice"
 	f := Eq("name", "alice")
-	s.repo.On("List", mock.Anything, "fake", f, Sort{}).Return([]*MarshaledEntity{m1}, nil)
+	s.repo.On("List", mock.Anything, "fake", f, Sort{}, Unpaged()).Return([]*MarshaledEntity{m1}, nil)
 	s.marshaler.On("Unmarshal", mock.Anything, m1).Return(e1, nil)
 
 	got, err := s.store.List(s.ctx, f, Sort{})

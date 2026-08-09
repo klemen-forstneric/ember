@@ -86,7 +86,7 @@ func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.Mars
 	}, nil
 }
 
-func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter, s ember.Sort) ([]*ember.MarshaledEntity, error) {
+func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter, s ember.Sort, _ ember.Page) ([]*ember.MarshaledEntity, error) {
 	pred, err := buildPredicate(f)
 	if err != nil {
 		return nil, err

@@ -49,7 +49,7 @@ func TestListFilterEqAndAnd(t *testing.T) {
 	require.NoError(t, r.Save(ctx, me("2", "t", 1, `{"user":"a","kind":"y"}`)))
 	require.NoError(t, r.Save(ctx, me("3", "t", 1, `{"user":"b","kind":"x"}`)))
 
-	got, err := r.List(ctx, "t", ember.And(ember.Eq("user", "a"), ember.Eq("kind", "x")), ember.Sort{})
+	got, err := r.List(ctx, "t", ember.And(ember.Eq("user", "a"), ember.Eq("kind", "x")), ember.Sort{}, ember.Unpaged())
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "1", got[0].ID)
@@ -62,11 +62,11 @@ func TestListSort(t *testing.T) {
 	require.NoError(t, r.Save(ctx, me("2", "t", 1, `{"created_at":"2026-01-01"}`)))
 	require.NoError(t, r.Save(ctx, me("3", "t", 1, `{"created_at":"2026-01-02"}`)))
 
-	asc, err := r.List(ctx, "t", nil, ember.Asc("created_at"))
+	asc, err := r.List(ctx, "t", nil, ember.Asc("created_at"), ember.Unpaged())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"2", "3", "1"}, []string{asc[0].ID, asc[1].ID, asc[2].ID})
 
-	desc, err := r.List(ctx, "t", nil, ember.Desc("created_at"))
+	desc, err := r.List(ctx, "t", nil, ember.Desc("created_at"), ember.Unpaged())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"1", "3", "2"}, []string{desc[0].ID, desc[1].ID, desc[2].ID})
 }
@@ -78,11 +78,11 @@ func TestListNegationAndExistence(t *testing.T) {
 	require.NoError(t, r.Save(ctx, me("2", "t", 1, `{"user":"b"}`)))
 	require.NoError(t, r.Save(ctx, me("3", "t", 1, `{}`)))
 
-	notA, err := r.List(ctx, "t", ember.Not(ember.Eq("user", "a")), ember.Sort{})
+	notA, err := r.List(ctx, "t", ember.Not(ember.Eq("user", "a")), ember.Sort{}, ember.Unpaged())
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"2", "3"}, []string{notA[0].ID, notA[1].ID})
 
-	hasUser, err := r.List(ctx, "t", ember.Exists("user", true), ember.Sort{})
+	hasUser, err := r.List(ctx, "t", ember.Exists("user", true), ember.Sort{}, ember.Unpaged())
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"1", "2"}, []string{hasUser[0].ID, hasUser[1].ID})
 }
@@ -94,17 +94,17 @@ func TestListSortLexicalVsNumeric(t *testing.T) {
 	require.NoError(t, r.Save(ctx, me("b", "t", 1, `{"n":10}`)))
 	require.NoError(t, r.Save(ctx, me("c", "t", 1, `{"n":2}`)))
 
-	lex, err := r.List(ctx, "t", nil, ember.Asc("n"))
+	lex, err := r.List(ctx, "t", nil, ember.Asc("n"), ember.Unpaged())
 	require.NoError(t, err)
 	require.Len(t, lex, 3)
 	assert.Equal(t, []string{"b", "c", "a"}, []string{lex[0].ID, lex[1].ID, lex[2].ID})
 
-	num, err := r.List(ctx, "t", nil, ember.Asc("n").Numeric())
+	num, err := r.List(ctx, "t", nil, ember.Asc("n").Numeric(), ember.Unpaged())
 	require.NoError(t, err)
 	require.Len(t, num, 3)
 	assert.Equal(t, []string{"c", "a", "b"}, []string{num[0].ID, num[1].ID, num[2].ID})
 
-	desc, err := r.List(ctx, "t", nil, ember.Desc("n").Numeric())
+	desc, err := r.List(ctx, "t", nil, ember.Desc("n").Numeric(), ember.Unpaged())
 	require.NoError(t, err)
 	require.Len(t, desc, 3)
 	assert.Equal(t, []string{"b", "a", "c"}, []string{desc[0].ID, desc[1].ID, desc[2].ID})

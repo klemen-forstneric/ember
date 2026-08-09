@@ -45,15 +45,15 @@ func TestListSortAscendingDescending(t *testing.T) {
 	repo, err := NewEntityRepository(ctx, col)
 	require.NoError(t, err)
 
-	asc, err := repo.List(ctx, "fake", nil, ember.Asc("n"))
+	asc, err := repo.List(ctx, "fake", nil, ember.Asc("n"), ember.Unpaged())
 	require.NoError(t, err)
 	require.Equal(t, []string{"1", "2", "3"}, nValues(asc))
 
-	desc, err := repo.List(ctx, "fake", nil, ember.Desc("n"))
+	desc, err := repo.List(ctx, "fake", nil, ember.Desc("n"), ember.Unpaged())
 	require.NoError(t, err)
 	require.Equal(t, []string{"3", "2", "1"}, nValues(desc))
 
-	all, err := repo.List(ctx, "fake", nil, ember.Sort{})
+	all, err := repo.List(ctx, "fake", nil, ember.Sort{}, ember.Unpaged())
 	require.NoError(t, err)
 	require.Len(t, all, 3)
 }
@@ -91,11 +91,11 @@ func TestListSortNumeric(t *testing.T) {
 	repo, err := NewEntityRepository(ctx, col)
 	require.NoError(t, err)
 
-	asc, err := repo.List(ctx, "fake", nil, ember.Asc("n").Numeric())
+	asc, err := repo.List(ctx, "fake", nil, ember.Asc("n").Numeric(), ember.Unpaged())
 	require.NoError(t, err)
 	require.Equal(t, []float64{2, 9, 10}, nNumbers(asc))
 
-	desc, err := repo.List(ctx, "fake", nil, ember.Desc("n").Numeric())
+	desc, err := repo.List(ctx, "fake", nil, ember.Desc("n").Numeric(), ember.Unpaged())
 	require.NoError(t, err)
 	require.Equal(t, []float64{10, 9, 2}, nNumbers(desc))
 }

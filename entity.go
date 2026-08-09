@@ -56,5 +56,5 @@ type EntityMarshaler[E Entity] interface {
 type EntityRepository interface {
 	Save(ctx context.Context, m *MarshaledEntity) error
 	Get(ctx context.Context, typ, id string) (*MarshaledEntity, error)
-	List(ctx context.Context, typ string, f Filter, s Sort) ([]*MarshaledEntity, error)
+	List(ctx context.Context, typ string, f Filter, s Sort, p Page) ([]*MarshaledEntity, error)
 }

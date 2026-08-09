@@ -49,7 +49,7 @@ func (s *EntityLoaderSuite) TestList() {
 	e1 := newFakeEntity("1")
 	e1.Name = "alice"
 	f := Eq("name", "alice")
-	s.repo.On("List", mock.Anything, "fake", f, Sort{}).Return([]*MarshaledEntity{m1}, nil)
+	s.repo.On("List", mock.Anything, "fake", f, Sort{}, Unpaged()).Return([]*MarshaledEntity{m1}, nil)
 	s.marshaler.On("Unmarshal", mock.Anything, m1).Return(e1, nil)
 
 	got, err := s.loader.List(s.ctx, f, Sort{})
@@ -60,7 +60,7 @@ func (s *EntityLoaderSuite) TestList() {
 
 func (s *EntityLoaderSuite) TestListError() {
 	sentinel := errors.New("boom")
-	s.repo.On("List", mock.Anything, "fake", mock.Anything, mock.Anything).Return(nil, sentinel)
+	s.repo.On("List", mock.Anything, "fake", mock.Anything, mock.Anything, mock.Anything).Return(nil, sentinel)
 
 	_, err := s.loader.List(s.ctx, nil, Sort{})
 
@@ -69,11 +69,31 @@ func (s *EntityLoaderSuite) TestListError() {
 
 func (s *EntityLoaderSuite) TestListUnmarshalError() {
 	m1 := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(3), Data: []byte("alice")}
-	s.repo.On("List", mock.Anything, "fake", mock.Anything, mock.Anything).Return([]*MarshaledEntity{m1}, nil)
+	s.repo.On("List", mock.Anything, "fake", mock.Anything, mock.Anything, mock.Anything).Return([]*MarshaledEntity{m1}, nil)
 	s.marshaler.On("Unmarshal", mock.Anything, m1).Return(nil, errors.New("unmarshal boom"))
 
 	got, err := s.loader.List(s.ctx, nil, Sort{})
 
 	s.Require().Error(err)
 	s.Nil(got)
+}
+
+func (s *EntityLoaderSuite) TestListPagePassesPageThrough() {
+	f := Eq("k", "v")
+	p := Limit(2).After(int64(7), "1")
+	m1 := &MarshaledEntity{ID: "2", Type: "fake"}
+	s.repo.On("List", mock.Anything, "fake", f, Asc("seq").Numeric(), p).Return([]*MarshaledEntity{m1}, nil)
+	s.marshaler.On("Unmarshal", mock.Anything, m1).Return(newFakeEntity("2"), nil)
+
+	got, err := s.loader.ListPage(s.ctx, f, Asc("seq").Numeric(), p)
+
+	s.Require().NoError(err)
+	s.Require().Len(got, 1)
+}
+
+func (s *EntityLoaderSuite) TestListPageRejectsInvalidPage() {
+	_, err := s.loader.ListPage(s.ctx, nil, Unsorted(), Page{Offset: 5})
+
+	s.Require().ErrorIs(err, ErrInvalidPage)
+	s.repo.AssertNotCalled(s.T(), "List")
 }
