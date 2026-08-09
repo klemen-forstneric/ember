@@ -17,7 +17,7 @@ type message struct {
 	Metadata  ember.Metadata  `json:"metadata,omitempty"`
 	Version   uint64          `json:"version"`
 	Idx       int             `json:"idx"`
-	Timestamp time.Time       `json:"created_at"`
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 func encode(e ember.EventEnvelope) ([]byte, error) {
@@ -29,7 +29,7 @@ func encode(e ember.EventEnvelope) ([]byte, error) {
 		Metadata:  e.Metadata,
 		Version:   e.Version,
 		Idx:       e.Index,
-		Timestamp: e.Timestamp,
+		CreatedAt: e.Timestamp,
 	})
 }
 
@@ -45,6 +45,6 @@ func decode(b []byte) (ember.EventEnvelope, error) {
 		Metadata:  m.Metadata,
 		Version:   m.Version,
 		Index:     m.Idx,
-		Timestamp: m.Timestamp,
+		Timestamp: m.CreatedAt,
 	}, nil
 }
