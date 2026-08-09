@@ -1,6 +1,9 @@
 package wal
 
 import (
+	"encoding/json"
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -55,6 +58,28 @@ func TestEncodeDecodeRoundTripsTheOrderingKey(t *testing.T) {
 	require.Equal(t, 2, got.Index)
 	require.Equal(t, e.EntityID, got.EntityID)
 	require.Equal(t, e.Event.Type, got.Event.Type)
+}
+
+// encode and decode share the message struct, so a round trip passes under any
+// key names. This pins the wire shape itself, which the mongo and postgres
+// outbox write paths mirror field for field.
+func TestEncodeUsesTheOutboxWireKeys(t *testing.T) {
+	b, err := encode(ember.EventEnvelope{
+		ID:        "e1",
+		EntityID:  "A",
+		Event:     &ember.MarshaledEvent{Type: "Created", Data: []byte(`{"k":"v"}`)},
+		Metadata:  ember.Metadata{ember.MetadataKey("correlation_id"): "c-1"},
+		Version:   7,
+		Index:     2,
+		Timestamp: time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(b, &raw))
+	require.ElementsMatch(t,
+		[]string{"id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at"},
+		slices.Collect(maps.Keys(raw)))
 }
 
 func TestDecodeRejectsMalformedPayload(t *testing.T) {

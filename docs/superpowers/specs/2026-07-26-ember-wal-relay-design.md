@@ -128,9 +128,18 @@ type message struct {
 	Type      string          `json:"type"`
 	Data      json.RawMessage `json:"data"`
 	Metadata  ember.Metadata  `json:"metadata,omitempty"`
-	Timestamp time.Time       `json:"timestamp"`
+	Version   uint64          `json:"version"`
+	Idx       int             `json:"idx"`
+	Timestamp time.Time       `json:"created_at"`
 }
 ```
+
+`Version`/`Idx` were added by the event ordering redesign
+(`2026-08-08-ember-event-ordering-design.md`). Nothing on this path reads them —
+WAL ordering is commit order, with emit order inside a transaction — but the
+envelope carries them, so dropping them would make `decode(encode(e)) != e`.
+The field order and the `created_at` key match the mongo and postgres outbox
+write paths, so the three can be compared line by line.
 
 `Metadata` is mandatory. `pulsar.Publisher.Publish` hard-fails on a missing
 `MetadataKeyCorrelationID` (`pulsar/publisher.go:47-50`), and `pg-logrepl`'s message struct
