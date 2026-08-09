@@ -2,7 +2,6 @@ package mongo
 
 import (
 	"context"
-	"slices"
 	"testing"
 	"time"
 
@@ -98,20 +97,8 @@ func (s *EventRepositorySuite) TestListUnpublishedOrdersAcrossEntitiesByEntityID
 
 	got, err := s.repo.ListUnpublished(ctx, 10)
 	s.Require().NoError(err)
-	s.Equal([]string{"a-1", "a-2", "b-1", "c-1", "c-2"}, ids(got))
-
-	perEntity := map[string][]uint64{}
-	var order []string
-	for _, e := range got {
-		if len(perEntity[e.EntityID]) == 0 {
-			order = append(order, e.EntityID)
-		}
-		perEntity[e.EntityID] = append(perEntity[e.EntityID], e.Version)
-	}
-	s.Equal([]string{"A", "B", "C"}, order, "runs must be grouped by entity_id in ascending order")
-	for entity, versions := range perEntity {
-		s.True(slices.IsSorted(versions), "entity %s's run must be a version-ordered prefix", entity)
-	}
+	s.Equal([]string{"a-1", "a-2", "b-1", "c-1", "c-2"}, ids(got),
+		"flat order must group runs by entity_id, each run a version-ordered prefix")
 }
 
 // TestSaveStoresDataAsADocument pins the reason data is not stored as bytes: an
