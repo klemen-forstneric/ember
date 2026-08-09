@@ -87,19 +87,27 @@ func TestListNegationAndExistence(t *testing.T) {
 	assert.ElementsMatch(t, []string{"1", "2"}, []string{hasUser[0].ID, hasUser[1].ID})
 }
 
-// Sort is lexical (text) ordering, matching the SQL backend's uncast jsonb text
-// extraction — numeric values order as text ("10" < "2" < "9"), NOT numerically.
-func TestListSortIsLexical(t *testing.T) {
+func TestListSortLexicalVsNumeric(t *testing.T) {
 	r := New()
 	ctx := context.Background()
 	require.NoError(t, r.Save(ctx, me("a", "t", 1, `{"n":9}`)))
 	require.NoError(t, r.Save(ctx, me("b", "t", 1, `{"n":10}`)))
 	require.NoError(t, r.Save(ctx, me("c", "t", 1, `{"n":2}`)))
 
-	got, err := r.List(ctx, "t", nil, ember.Asc("n"))
+	lex, err := r.List(ctx, "t", nil, ember.Asc("n"))
 	require.NoError(t, err)
-	require.Len(t, got, 3)
-	assert.Equal(t, []string{"b", "c", "a"}, []string{got[0].ID, got[1].ID, got[2].ID})
+	require.Len(t, lex, 3)
+	assert.Equal(t, []string{"b", "c", "a"}, []string{lex[0].ID, lex[1].ID, lex[2].ID})
+
+	num, err := r.List(ctx, "t", nil, ember.Asc("n").Numeric())
+	require.NoError(t, err)
+	require.Len(t, num, 3)
+	assert.Equal(t, []string{"c", "a", "b"}, []string{num[0].ID, num[1].ID, num[2].ID})
+
+	desc, err := r.List(ctx, "t", nil, ember.Desc("n").Numeric())
+	require.NoError(t, err)
+	require.Len(t, desc, 3)
+	assert.Equal(t, []string{"b", "a", "c"}, []string{desc[0].ID, desc[1].ID, desc[2].ID})
 }
 
 // Data returned from the store must not alias stored state: mutating a returned

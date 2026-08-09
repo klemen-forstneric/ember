@@ -8,11 +8,6 @@ import (
 	"github.com/klemen-forstneric/ember"
 )
 
-// applySort orders items by the sort path using LEXICAL (text) comparison, to
-// mirror the SQL backend which extracts a jsonb field as text for ORDER BY
-// (no cast). Sort is thus defined for lexically-orderable fields (strings, e.g.
-// RFC3339 timestamps); ordering of numeric fields is not guaranteed to match
-// across backends. Missing-path placement (here: last) is backend-defined.
 func applySort(items []*ember.MarshaledEntity, s ember.Sort) {
 	if s.Path == "" {
 		return
@@ -20,19 +15,24 @@ func applySort(items []*ember.MarshaledEntity, s ember.Sort) {
 	sort.SliceStable(items, func(i, j int) bool {
 		vi, oki, _ := lookup(items[i], s.Path)
 		vj, okj, _ := lookup(items[j], s.Path)
-		if !oki || !okj { // missing paths sort last
+		if !oki || !okj {
 			return oki && !okj
 		}
-		ti, tj := textOf(vi), textOf(vj)
 		if s.Direction == ember.Descending {
-			return ti > tj
+			return lessThan(vj, vi, s.Ordering)
 		}
-		return ti < tj
+		return lessThan(vi, vj, s.Ordering)
 	})
 }
 
-// textOf renders a looked-up value to the text form used for lexical ordering,
-// matching how the SQL backend extracts a jsonb field as text.
+func lessThan(a, b any, o ember.Ordering) bool {
+	if o == ember.Numeric {
+		c, ok := orderJSON(a, b)
+		return ok && c < 0
+	}
+	return textOf(a) < textOf(b)
+}
+
 func textOf(v any) string {
 	if s, ok := toStr(v); ok {
 		return s
