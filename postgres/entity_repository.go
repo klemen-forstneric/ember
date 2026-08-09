@@ -86,7 +86,7 @@ func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.Mars
 	}, nil
 }
 
-func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter, s ember.Sort, _ ember.Page) ([]*ember.MarshaledEntity, error) {
+func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter, s ember.Sort, p ember.Page) ([]*ember.MarshaledEntity, error) {
 	pred, err := buildPredicate(f)
 	if err != nil {
 		return nil, err
@@ -98,10 +98,23 @@ func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter,
 		Where(sq.Eq{"type": typ})
 
 	if pred != nil {
-		qb = qb.Where(pred) // multiple Where clauses are AND-ed together
+		qb = qb.Where(pred)
 	}
-	if clauses := orderBy(s); len(clauses) > 0 {
+	if !p.Cursor.IsZero() {
+		seek, err := seekPredicate(s, p.Cursor)
+		if err != nil {
+			return nil, err
+		}
+		qb = qb.Where(seek)
+	}
+	if clauses := orderBy(s, !p.IsZero()); len(clauses) > 0 {
 		qb = qb.OrderBy(clauses...)
+	}
+	if p.Limit > 0 {
+		qb = qb.Limit(uint64(p.Limit))
+	}
+	if p.Offset > 0 {
+		qb = qb.Offset(uint64(p.Offset))
 	}
 
 	query, args, err := qb.ToSql()
