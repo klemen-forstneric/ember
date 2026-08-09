@@ -39,11 +39,11 @@ func (c Cursor) MarshalText() ([]byte, error) {
 	case time.Time:
 		w.Kind, w.Value = "s", x.UTC().Format(time.RFC3339Nano)
 	case bool:
-		w.Kind, w.Value = "s", strconv.FormatBool(x)
+		w.Kind, w.Value = "b", strconv.FormatBool(x)
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		w.Kind, w.Value = "n", fmt.Sprintf("%d", x)
 	case float32, float64:
-		w.Kind, w.Value = "n", fmt.Sprintf("%v", x)
+		w.Kind, w.Value = "f", fmt.Sprintf("%v", x)
 	default:
 		return nil, fmt.Errorf("%w: value type %T", ErrInvalidCursor, c.Value)
 	}
@@ -75,11 +75,19 @@ func (c *Cursor) UnmarshalText(b []byte) error {
 		c.Value = nil
 	case "s":
 		c.Value = w.Value
-	case "n":
-		if i, err := strconv.ParseInt(w.Value, 10, 64); err == nil {
-			c.Value = i
-			break
+	case "b":
+		b, err := strconv.ParseBool(w.Value)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidCursor, err)
 		}
+		c.Value = b
+	case "n":
+		i, err := strconv.ParseInt(w.Value, 10, 64)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidCursor, err)
+		}
+		c.Value = i
+	case "f":
 		f, err := strconv.ParseFloat(w.Value, 64)
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidCursor, err)
@@ -136,6 +144,9 @@ func (p Page) Validate() error {
 	}
 	if p.Limit == 0 && (p.Offset > 0 || !p.Cursor.IsZero()) {
 		return fmt.Errorf("%w: offset or cursor requires a limit", ErrInvalidPage)
+	}
+	if p.Cursor.ID == "" && p.Cursor.Value != nil {
+		return fmt.Errorf("%w: cursor value without id", ErrInvalidPage)
 	}
 	return nil
 }

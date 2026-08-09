@@ -31,6 +31,7 @@ func TestPageValidate(t *testing.T) {
 	require.ErrorIs(t, Limit(10).Skip(5).After(int64(1), "x").Validate(), ErrInvalidPage)
 	require.ErrorIs(t, Page{Offset: 5}.Validate(), ErrInvalidPage)
 	require.ErrorIs(t, Page{Cursor: Cursor{ID: "x"}}.Validate(), ErrInvalidPage)
+	require.ErrorIs(t, Page{Limit: 10, Cursor: Cursor{Value: 7}}.Validate(), ErrInvalidPage)
 }
 
 func TestCursorIsZero(t *testing.T) {
@@ -53,6 +54,10 @@ func TestCursorTextRoundTrip(t *testing.T) {
 		{"int", Cursor{Value: 7, ID: "a"}, Cursor{Value: int64(7), ID: "a"}},
 		{"int64 beyond float precision", Cursor{Value: int64(9007199254740993), ID: "a"}, Cursor{Value: int64(9007199254740993), ID: "a"}},
 		{"float", Cursor{Value: 1.5, ID: "a"}, Cursor{Value: 1.5, ID: "a"}},
+		{"integral float", Cursor{Value: float64(7), ID: "a"}, Cursor{Value: float64(7), ID: "a"}},
+		{"float32", Cursor{Value: float32(1.5), ID: "a"}, Cursor{Value: float64(1.5), ID: "a"}},
+		{"bool true", Cursor{Value: true, ID: "a"}, Cursor{Value: true, ID: "a"}},
+		{"bool false", Cursor{Value: false, ID: "a"}, Cursor{Value: false, ID: "a"}},
 		{"time", Cursor{Value: ts, ID: "a"}, Cursor{Value: ts.Format(time.RFC3339Nano), ID: "a"}},
 	}
 
