@@ -58,19 +58,21 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 	return err
 }
 
-func (r *EventRepository) ListUnpublished(ctx context.Context, maxEntities, maxEventsPerEntity int) ([]ember.EventEnvelope, error) {
-	query := fmt.Sprintf(`
+func listUnpublishedQuery(table string) string {
+	return fmt.Sprintf(`
 WITH picked AS (
-  SELECT DISTINCT entity_id FROM %[1]s WHERE NOT published ORDER BY random() LIMIT $1
+  SELECT entity_id FROM %[1]s WHERE NOT published GROUP BY entity_id ORDER BY random() LIMIT $1
 ), ranked AS (
   SELECT o.id, o.entity_id, o.type, o.data, o.metadata, o.version, o.idx, o.created_at,
          row_number() OVER (PARTITION BY o.entity_id ORDER BY o.version, o.idx) rn
   FROM %[1]s o JOIN picked p USING (entity_id) WHERE NOT o.published
 )
 SELECT id, entity_id, type, data, metadata, version, idx, created_at
-FROM ranked WHERE rn <= $2 ORDER BY entity_id, version, idx`, r.table)
+FROM ranked WHERE rn <= $2 ORDER BY entity_id, version, idx`, table)
+}
 
-	rows, err := r.db.Conn(ctx).QueryContext(ctx, query, maxEntities, maxEventsPerEntity)
+func (r *EventRepository) ListUnpublished(ctx context.Context, maxEntities, maxEventsPerEntity int) ([]ember.EventEnvelope, error) {
+	rows, err := r.db.Conn(ctx).QueryContext(ctx, listUnpublishedQuery(r.table), maxEntities, maxEventsPerEntity)
 	if err != nil {
 		return nil, err
 	}
