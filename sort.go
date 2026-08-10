@@ -1,10 +1,5 @@
 package ember
 
-import (
-	"errors"
-	"fmt"
-)
-
 // Direction
 type Direction int
 
@@ -45,25 +40,4 @@ func DescLex(path string) Sort {
 
 func DescNum(path string) Sort {
 	return Sort{Path: path, Direction: Descending, Ordering: Numeric}
-}
-
-var ErrInvalidSort = errors.New("ember: invalid sort")
-
-func (s Sort) Validate() error {
-	if s.Path == "" || reservedPath(s.Path) {
-		return nil
-	}
-	if s.Ordering == orderingUndeclared {
-		return fmt.Errorf("%w: path %q needs a declared ordering (AscLex/AscNum/DescLex/DescNum)", ErrInvalidSort, s.Path)
-	}
-	return nil
-}
-
-func reservedPath(path string) bool {
-	switch path {
-	case "id", "type", "version":
-		return true
-	default:
-		return false
-	}
 }

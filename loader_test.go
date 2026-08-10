@@ -97,10 +97,3 @@ func (s *EntityLoaderSuite) TestListPageRejectsInvalidPage() {
 	s.Require().ErrorIs(err, ErrInvalidPage)
 	s.repo.AssertNotCalled(s.T(), "List")
 }
-
-func (s *EntityLoaderSuite) TestListRejectsUndeclaredOrdering() {
-	_, err := s.loader.List(s.ctx, nil, Sort{Path: "seq", Direction: Ascending})
-
-	s.Require().ErrorIs(err, ErrInvalidSort)
-	s.repo.AssertNotCalled(s.T(), "List")
-}

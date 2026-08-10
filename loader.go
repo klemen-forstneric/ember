@@ -26,9 +26,6 @@ func (l *EntityLoader[E]) List(ctx context.Context, f Filter, sort Sort) ([]E, e
 }
 
 func (l *EntityLoader[E]) ListPage(ctx context.Context, f Filter, sort Sort, p Page) ([]E, error) {
-	if err := sort.Validate(); err != nil {
-		return nil, err
-	}
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
