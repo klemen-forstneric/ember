@@ -21,8 +21,8 @@ func TestOrderBy(t *testing.T) {
 		{"lexical desc", ember.DescLex("created_at"), []string{"data#>>'{created_at}' DESC"}},
 		{"numeric asc", ember.AscNum("seq"), []string{"(data#>>'{seq}')::numeric ASC"}},
 		{"numeric desc", ember.DescNum("seq"), []string{"(data#>>'{seq}')::numeric DESC"}},
-		{"nested path", ember.Asc("job.id"), []string{"data#>>'{job,id}' ASC"}},
-		{"reserved id", ember.Asc("id"), []string{"id ASC"}},
+		{"nested path", ember.AscLex("job.id"), []string{"data#>>'{job,id}' ASC"}},
+		{"reserved id", ember.Sort{Path: "id", Direction: ember.Ascending}, []string{"id ASC"}},
 		{"reserved version ignores ordering", ember.AscNum("version"), []string{"version ASC"}},
 	}
 
@@ -35,7 +35,7 @@ func TestOrderBy(t *testing.T) {
 
 func TestOrderByPagedAppendsTiebreak(t *testing.T) {
 	assert.Equal(t, []string{"id ASC"}, orderBy(ember.Unsorted(), true))
-	assert.Equal(t, []string{"data#>>'{created_at}' ASC", "id ASC"}, orderBy(ember.Asc("created_at"), true))
+	assert.Equal(t, []string{"data#>>'{created_at}' ASC", "id ASC"}, orderBy(ember.AscLex("created_at"), true))
 	assert.Equal(t, []string{"(data#>>'{seq}')::numeric DESC", "id DESC"}, orderBy(ember.DescNum("seq"), true))
 }
 

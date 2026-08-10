@@ -45,11 +45,11 @@ func TestListSortAscendingDescending(t *testing.T) {
 	repo, err := NewEntityRepository(ctx, col)
 	require.NoError(t, err)
 
-	asc, err := repo.List(ctx, "fake", nil, ember.Asc("n"), ember.Unpaged())
+	asc, err := repo.List(ctx, "fake", nil, ember.AscLex("n"), ember.Unpaged())
 	require.NoError(t, err)
 	require.Equal(t, []string{"1", "2", "3"}, nValues(asc))
 
-	desc, err := repo.List(ctx, "fake", nil, ember.Desc("n"), ember.Unpaged())
+	desc, err := repo.List(ctx, "fake", nil, ember.DescLex("n"), ember.Unpaged())
 	require.NoError(t, err)
 	require.Equal(t, []string{"3", "2", "1"}, nValues(desc))
 

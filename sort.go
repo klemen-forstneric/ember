@@ -31,10 +31,6 @@ type Sort struct {
 
 func Unsorted() Sort { return Sort{} }
 
-func Asc(path string) Sort { return Sort{Path: path, Direction: Ascending} }
-
-func Desc(path string) Sort { return Sort{Path: path, Direction: Descending} }
-
 func AscLex(path string) Sort {
 	return Sort{Path: path, Direction: Ascending, Ordering: Lexical}
 }

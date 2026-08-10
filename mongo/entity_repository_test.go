@@ -221,11 +221,11 @@ func TestListPagingUnsortedDescendingKeysetWalksForward(t *testing.T) {
 	repo, err := NewEntityRepository(ctx, col)
 	require.NoError(t, err)
 
-	first, err := repo.List(ctx, "fake", nil, ember.Desc(""), ember.Limit(2))
+	first, err := repo.List(ctx, "fake", nil, ember.Sort{Direction: ember.Descending}, ember.Limit(2))
 	require.NoError(t, err)
 	require.Equal(t, []string{"id1", "id2"}, []string{first[0].ID, first[1].ID})
 
-	second, err := repo.List(ctx, "fake", nil, ember.Desc(""), ember.Limit(2).After(nil, first[1].ID))
+	second, err := repo.List(ctx, "fake", nil, ember.Sort{Direction: ember.Descending}, ember.Limit(2).After(nil, first[1].ID))
 	require.NoError(t, err)
 	require.Equal(t, []string{"id3"}, []string{second[0].ID})
 }
@@ -248,6 +248,6 @@ func TestListPagingCursorValueInvalidWrapsErrInvalidCursor(t *testing.T) {
 	repo, err := NewEntityRepository(ctx, col)
 	require.NoError(t, err)
 
-	_, err = repo.List(ctx, "fake", nil, ember.Asc("n"), ember.Limit(2).After(time.Duration(1), "idA"))
+	_, err = repo.List(ctx, "fake", nil, ember.AscNum("n"), ember.Limit(2).After(time.Duration(1), "idA"))
 	require.ErrorIs(t, err, ember.ErrInvalidCursor)
 }

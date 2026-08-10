@@ -83,11 +83,11 @@ func TestListSort(t *testing.T) {
 	require.NoError(t, r.Save(ctx, me("2", "t", 1, `{"created_at":"2026-01-01"}`)))
 	require.NoError(t, r.Save(ctx, me("3", "t", 1, `{"created_at":"2026-01-02"}`)))
 
-	asc, err := r.List(ctx, "t", nil, ember.Asc("created_at"), ember.Unpaged())
+	asc, err := r.List(ctx, "t", nil, ember.AscLex("created_at"), ember.Unpaged())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"2", "3", "1"}, []string{asc[0].ID, asc[1].ID, asc[2].ID})
 
-	desc, err := r.List(ctx, "t", nil, ember.Desc("created_at"), ember.Unpaged())
+	desc, err := r.List(ctx, "t", nil, ember.DescLex("created_at"), ember.Unpaged())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"1", "3", "2"}, []string{desc[0].ID, desc[1].ID, desc[2].ID})
 }
@@ -141,11 +141,11 @@ func TestListSortReservedPathIgnoresOrdering(t *testing.T) {
 		require.NoError(t, r.Save(ctx, me("b", "t", v, `{}`)))
 	}
 
-	asc, err := r.List(ctx, "t", nil, ember.Asc("version"), ember.Unpaged())
+	asc, err := r.List(ctx, "t", nil, ember.Sort{Path: "version", Direction: ember.Ascending}, ember.Unpaged())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"a", "b"}, ids(asc))
 
-	desc, err := r.List(ctx, "t", nil, ember.Desc("version"), ember.Unpaged())
+	desc, err := r.List(ctx, "t", nil, ember.Sort{Path: "version", Direction: ember.Descending}, ember.Unpaged())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"b", "a"}, ids(desc))
 }
