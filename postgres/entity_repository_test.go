@@ -53,7 +53,7 @@ func TestGetScansDocumentColumnsInOrder(t *testing.T) {
 
 	mock.ExpectQuery("SELECT id, type, version, data FROM entities").
 		WithArgs("1", "order").
-		WillReturnRows(sqlmock.NewRows(documentColumns).AddRow("1", "order", 7, []byte(`{"n":"a"}`)))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "type", "version", "data"}).AddRow("1", "order", 7, []byte(`{"n":"a"}`)))
 
 	repo := NewEntityRepository(NewDB(db), "entities")
 	got, err := repo.Get(context.Background(), "order", "1")
@@ -72,7 +72,7 @@ func TestGetMissingIsNotFound(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectQuery("SELECT id, type, version, data FROM entities").
-		WillReturnRows(sqlmock.NewRows(documentColumns))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "type", "version", "data"}))
 
 	repo := NewEntityRepository(NewDB(db), "entities")
 	_, err = repo.Get(context.Background(), "order", "nope")

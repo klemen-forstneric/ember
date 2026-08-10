@@ -20,12 +20,6 @@ type document struct {
 	Data    []byte
 }
 
-var documentColumns = []string{"id", "type", "version", "data"}
-
-func (d *document) scan(row interface{ Scan(...any) error }) error {
-	return row.Scan(&d.ID, &d.Type, &d.Version, &d.Data)
-}
-
 func (d document) NewMarshaledEntity() *ember.MarshaledEntity {
 	return &ember.MarshaledEntity{
 		ID:      d.ID,
@@ -48,7 +42,7 @@ func NewEntityRepository(db *DB, table string) *EntityRepository {
 func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) error {
 	query, args, err := psql.
 		Insert(r.table).
-		Columns(documentColumns...).
+		Columns("id", "type", "version", "data").
 		Values(m.ID, m.Type, m.Version.Value(), m.Data).
 		Suffix(
 			"ON CONFLICT (id, type) DO UPDATE SET version = ?, data = ? WHERE "+r.table+".version = ?",
@@ -78,7 +72,7 @@ func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) e
 
 func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.MarshaledEntity, error) {
 	query, args, err := psql.
-		Select(documentColumns...).
+		Select("id", "type", "version", "data").
 		From(r.table).
 		Where(sq.Eq{"type": typ, "id": id}).
 		ToSql()
@@ -87,7 +81,9 @@ func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.Mars
 	}
 
 	var d document
-	if err := d.scan(r.db.Conn(ctx).QueryRowContext(ctx, query, args...)); err == sql.ErrNoRows {
+	row := r.db.Conn(ctx).QueryRowContext(ctx, query, args...)
+
+	if err := row.Scan(&d.ID, &d.Type, &d.Version, &d.Data); err == sql.ErrNoRows {
 		return nil, ember.ErrEntityNotFound
 	} else if err != nil {
 		return nil, err
@@ -103,7 +99,7 @@ func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter,
 	}
 
 	qb := psql.
-		Select(documentColumns...).
+		Select("id", "type", "version", "data").
 		From(r.table).
 		Where(sq.Eq{"type": typ})
 
@@ -141,7 +137,7 @@ func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter,
 	var out []*ember.MarshaledEntity
 	for rows.Next() {
 		var d document
-		if err := d.scan(rows); err != nil {
+		if err := rows.Scan(&d.ID, &d.Type, &d.Version, &d.Data); err != nil {
 			return nil, err
 		}
 		out = append(out, d.NewMarshaledEntity())

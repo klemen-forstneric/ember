@@ -82,7 +82,7 @@ func TestListQueryPlaceholders(t *testing.T) {
 	require.NoError(t, err, "buildPredicate")
 
 	gotSQL, gotArgs, err := psql.
-		Select(documentColumns...).
+		Select("id", "type", "version", "data").
 		From("entities").
 		Where(sq.Eq{"type": "order"}).
 		Where(pred).
