@@ -28,17 +28,17 @@ func applySort(items []*ember.MarshaledEntity, s ember.Sort, paged bool) {
 			return paged && idLess(items[i], items[j], s.Direction)
 		}
 		if lessThan(vi, vj, s) {
-			return s.Direction != ember.Descending
+			return s.Direction != ember.DirectionDescending
 		}
 		if lessThan(vj, vi, s) {
-			return s.Direction == ember.Descending
+			return s.Direction == ember.DirectionDescending
 		}
 		return paged && idLess(items[i], items[j], s.Direction)
 	})
 }
 
 func idLess(a, b *ember.MarshaledEntity, d ember.Direction) bool {
-	if d == ember.Descending {
+	if d == ember.DirectionDescending {
 		return b.ID < a.ID
 	}
 	return a.ID < b.ID
@@ -68,7 +68,7 @@ func afterCursor(m *ember.MarshaledEntity, s ember.Sort, c ember.Cursor) bool {
 	}
 
 	idAfter := m.ID > c.ID
-	if s.Direction == ember.Descending {
+	if s.Direction == ember.DirectionDescending {
 		idAfter = m.ID < c.ID
 	}
 
@@ -78,10 +78,10 @@ func afterCursor(m *ember.MarshaledEntity, s ember.Sort, c ember.Cursor) bool {
 	}
 
 	if lessThan(v, c.Value, s) {
-		return s.Direction == ember.Descending
+		return s.Direction == ember.DirectionDescending
 	}
 	if lessThan(c.Value, v, s) {
-		return s.Direction != ember.Descending
+		return s.Direction != ember.DirectionDescending
 	}
 
 	return idAfter
@@ -89,7 +89,7 @@ func afterCursor(m *ember.MarshaledEntity, s ember.Sort, c ember.Cursor) bool {
 
 func lessThan(a, b any, s ember.Sort) bool {
 	_, reserved := reservedPaths[s.Path]
-	if reserved || s.Ordering == ember.Numeric {
+	if reserved || s.Ordering == ember.OrderingNumeric {
 		c, ok := orderJSON(a, b)
 		return ok && c < 0
 	}

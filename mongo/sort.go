@@ -15,7 +15,7 @@ const (
 
 func sortDoc(s ember.Sort, paged bool) bson.D {
 	dir := sortAscending
-	if s.Direction == ember.Descending {
+	if s.Direction == ember.DirectionDescending {
 		dir = sortDescending
 	}
 
@@ -37,7 +37,7 @@ func seekPredicate(s ember.Sort, c ember.Cursor) (bson.D, error) {
 	}
 
 	op := "$gt"
-	if s.Direction == ember.Descending {
+	if s.Direction == ember.DirectionDescending {
 		op = "$lt"
 	}
 

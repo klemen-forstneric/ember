@@ -22,7 +22,7 @@ func TestOrderBy(t *testing.T) {
 		{"numeric asc", ember.AscNum("seq"), []string{"(data#>>'{seq}')::numeric ASC"}},
 		{"numeric desc", ember.DescNum("seq"), []string{"(data#>>'{seq}')::numeric DESC"}},
 		{"nested path", ember.AscLex("job.id"), []string{"data#>>'{job,id}' ASC"}},
-		{"reserved id", ember.Sort{Path: "id", Direction: ember.Ascending}, []string{"id ASC"}},
+		{"reserved id", ember.Sort{Path: "id", Direction: ember.DirectionAscending}, []string{"id ASC"}},
 		{"reserved version ignores ordering", ember.AscNum("version"), []string{"version ASC"}},
 	}
 
@@ -94,7 +94,7 @@ func TestSeekPredicateCursorValueInvalidWrapsErrInvalidCursor(t *testing.T) {
 }
 
 func TestSeekPredicateUnsortedIgnoresDirection(t *testing.T) {
-	pred, err := seekPredicate(ember.Sort{Direction: ember.Descending}, ember.Cursor{ID: "pay_abc"})
+	pred, err := seekPredicate(ember.Sort{Direction: ember.DirectionDescending}, ember.Cursor{ID: "pay_abc"})
 	require.NoError(t, err)
 
 	gotSQL, _, err := pred.ToSql()

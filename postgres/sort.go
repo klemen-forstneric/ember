@@ -10,7 +10,7 @@ import (
 
 func sortExpr(s ember.Sort) string {
 	col, reserved := column(s.Path)
-	if reserved || s.Ordering != ember.Numeric {
+	if reserved || s.Ordering != ember.OrderingNumeric {
 		return col
 	}
 	return "(" + col + ")::numeric"
@@ -37,7 +37,7 @@ func seekPredicate(s ember.Sort, c ember.Cursor) (sq.Sqlizer, error) {
 	}
 
 	op := ">"
-	if s.Direction == ember.Descending {
+	if s.Direction == ember.DirectionDescending {
 		op = "<"
 	}
 
@@ -51,7 +51,7 @@ func seekPredicate(s ember.Sort, c ember.Cursor) (sq.Sqlizer, error) {
 	}
 
 	placeholder := "?"
-	if _, reserved := column(s.Path); !reserved && s.Ordering == ember.Numeric {
+	if _, reserved := column(s.Path); !reserved && s.Ordering == ember.OrderingNumeric {
 		placeholder = "?::numeric"
 	}
 
@@ -59,7 +59,7 @@ func seekPredicate(s ember.Sort, c ember.Cursor) (sq.Sqlizer, error) {
 }
 
 func direction(d ember.Direction) string {
-	if d == ember.Descending {
+	if d == ember.DirectionDescending {
 		return "DESC"
 	}
 	return "ASC"

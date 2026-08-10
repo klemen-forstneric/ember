@@ -4,8 +4,8 @@ package ember
 type Direction int
 
 const (
-	Ascending Direction = iota
-	Descending
+	DirectionAscending Direction = iota
+	DirectionDescending
 )
 
 // Ordering
@@ -13,8 +13,8 @@ type Ordering int
 
 const (
 	orderingUndeclared Ordering = iota
-	Lexical
-	Numeric
+	OrderingLexical
+	OrderingNumeric
 )
 
 // Sort
@@ -27,17 +27,17 @@ type Sort struct {
 func Unsorted() Sort { return Sort{} }
 
 func AscLex(path string) Sort {
-	return Sort{Path: path, Direction: Ascending, Ordering: Lexical}
+	return Sort{Path: path, Direction: DirectionAscending, Ordering: OrderingLexical}
 }
 
 func AscNum(path string) Sort {
-	return Sort{Path: path, Direction: Ascending, Ordering: Numeric}
+	return Sort{Path: path, Direction: DirectionAscending, Ordering: OrderingNumeric}
 }
 
 func DescLex(path string) Sort {
-	return Sort{Path: path, Direction: Descending, Ordering: Lexical}
+	return Sort{Path: path, Direction: DirectionDescending, Ordering: OrderingLexical}
 }
 
 func DescNum(path string) Sort {
-	return Sort{Path: path, Direction: Descending, Ordering: Numeric}
+	return Sort{Path: path, Direction: DirectionDescending, Ordering: OrderingNumeric}
 }

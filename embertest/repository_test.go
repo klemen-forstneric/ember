@@ -141,11 +141,11 @@ func TestListSortReservedPathIgnoresOrdering(t *testing.T) {
 		require.NoError(t, r.Save(ctx, me("b", "t", v, `{}`)))
 	}
 
-	asc, err := r.List(ctx, "t", nil, ember.Sort{Path: "version", Direction: ember.Ascending}, ember.Unpaged())
+	asc, err := r.List(ctx, "t", nil, ember.Sort{Path: "version", Direction: ember.DirectionAscending}, ember.Unpaged())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"a", "b"}, ids(asc))
 
-	desc, err := r.List(ctx, "t", nil, ember.Sort{Path: "version", Direction: ember.Descending}, ember.Unpaged())
+	desc, err := r.List(ctx, "t", nil, ember.Sort{Path: "version", Direction: ember.DirectionDescending}, ember.Unpaged())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"b", "a"}, ids(desc))
 }
@@ -235,7 +235,7 @@ func TestListPagingUnsortedIgnoresDescendingDirection(t *testing.T) {
 	require.NoError(t, r.Save(ctx, me("b", "t", 1, `{}`)))
 	require.NoError(t, r.Save(ctx, me("c", "t", 1, `{}`)))
 
-	s := ember.Sort{Direction: ember.Descending}
+	s := ember.Sort{Direction: ember.DirectionDescending}
 
 	first, err := r.List(ctx, "t", nil, s, ember.Limit(2))
 	require.NoError(t, err)
