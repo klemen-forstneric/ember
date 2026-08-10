@@ -12,10 +12,24 @@ import (
 // psql renders `?` placeholders as Postgres `$N`.
 var psql = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
-// EntityRepository stores entities keyed by (id, type). The caller owns the DDL
-// and MUST give the table a unique index on exactly (id, type) — without it every
-// Save fails on the ON CONFLICT target. See the entity-key plan under
-// docs/superpowers/plans for the required statement.
+// document
+type document struct {
+	ID      string
+	Type    string
+	Version uint64
+	Data    []byte
+}
+
+func (d document) NewMarshaledEntity() *ember.MarshaledEntity {
+	return &ember.MarshaledEntity{
+		ID:      d.ID,
+		Type:    d.Type,
+		Version: ember.NewVersion(d.Version),
+		Data:    d.Data,
+	}
+}
+
+// EntityRepository
 type EntityRepository struct {
 	db    *DB
 	table string
@@ -58,7 +72,7 @@ func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) e
 
 func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.MarshaledEntity, error) {
 	query, args, err := psql.
-		Select("version", "data").
+		Select("id", "type", "version", "data").
 		From(r.table).
 		Where(sq.Eq{"type": typ, "id": id}).
 		ToSql()
@@ -66,47 +80,47 @@ func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.Mars
 		return nil, err
 	}
 
-	var (
-		version uint64
-		data    []byte
-	)
+	var d document
 	row := r.db.Conn(ctx).QueryRowContext(ctx, query, args...)
 
-	if err := row.Scan(&version, &data); err == sql.ErrNoRows {
+	if err := row.Scan(&d.ID, &d.Type, &d.Version, &d.Data); err == sql.ErrNoRows {
 		return nil, ember.ErrEntityNotFound
 	} else if err != nil {
 		return nil, err
 	}
 
-	return &ember.MarshaledEntity{
-		ID:      id,
-		Type:    typ,
-		Version: ember.NewVersion(version),
-		Data:    data,
-	}, nil
+	return d.NewMarshaledEntity(), nil
 }
 
-func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter, s ember.Sort) ([]*ember.MarshaledEntity, error) {
+func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter, s ember.Sort, p ember.Page) ([]*ember.MarshaledEntity, error) {
 	pred, err := buildPredicate(f)
 	if err != nil {
 		return nil, err
 	}
 
 	qb := psql.
-		Select("id", "version", "data").
+		Select("id", "type", "version", "data").
 		From(r.table).
 		Where(sq.Eq{"type": typ})
 
 	if pred != nil {
-		qb = qb.Where(pred) // multiple Where clauses are AND-ed together
+		qb = qb.Where(pred)
 	}
-	if s.Path != "" {
-		col, _ := column(s.Path)
-		dir := "ASC"
-		if s.Direction == ember.Descending {
-			dir = "DESC"
+	if !p.Cursor.IsZero() {
+		seek, err := seekPredicate(s, p.Cursor)
+		if err != nil {
+			return nil, err
 		}
-		qb = qb.OrderBy(col + " " + dir)
+		qb = qb.Where(seek)
+	}
+	if clauses := orderBy(s, !p.IsZero()); len(clauses) > 0 {
+		qb = qb.OrderBy(clauses...)
+	}
+	if p.Limit > 0 {
+		qb = qb.Limit(uint64(p.Limit))
+	}
+	if p.Offset > 0 {
+		qb = qb.Offset(uint64(p.Offset))
 	}
 
 	query, args, err := qb.ToSql()
@@ -122,20 +136,11 @@ func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter,
 
 	var out []*ember.MarshaledEntity
 	for rows.Next() {
-		var (
-			id      string
-			version uint64
-			data    []byte
-		)
-		if err := rows.Scan(&id, &version, &data); err != nil {
+		var d document
+		if err := rows.Scan(&d.ID, &d.Type, &d.Version, &d.Data); err != nil {
 			return nil, err
 		}
-		out = append(out, &ember.MarshaledEntity{
-			ID:      id,
-			Type:    typ,
-			Version: ember.NewVersion(version),
-			Data:    data,
-		})
+		out = append(out, d.NewMarshaledEntity())
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

@@ -1,6 +1,8 @@
 package embertest
 
 import (
+	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"time"
@@ -8,31 +10,92 @@ import (
 	"github.com/klemen-forstneric/ember"
 )
 
-// applySort orders items by the sort path using LEXICAL (text) comparison, to
-// mirror the SQL backend which extracts a jsonb field as text for ORDER BY
-// (no cast). Sort is thus defined for lexically-orderable fields (strings, e.g.
-// RFC3339 timestamps); ordering of numeric fields is not guaranteed to match
-// across backends. Missing-path placement (here: last) is backend-defined.
-func applySort(items []*ember.MarshaledEntity, s ember.Sort) {
+func applySort(items []*ember.MarshaledEntity, s ember.Sort, paged bool) {
 	if s.Path == "" {
+		if paged {
+			sort.SliceStable(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+		}
 		return
 	}
+
 	sort.SliceStable(items, func(i, j int) bool {
 		vi, oki, _ := lookup(items[i], s.Path)
 		vj, okj, _ := lookup(items[j], s.Path)
-		if !oki || !okj { // missing paths sort last
-			return oki && !okj
+		if !oki || !okj {
+			if oki != okj {
+				return oki
+			}
+			return paged && idLess(items[i], items[j], s.Direction)
 		}
-		ti, tj := textOf(vi), textOf(vj)
-		if s.Direction == ember.Descending {
-			return ti > tj
+		if lessThan(vi, vj, s) {
+			return s.Direction != ember.DirectionDescending
 		}
-		return ti < tj
+		if lessThan(vj, vi, s) {
+			return s.Direction == ember.DirectionDescending
+		}
+		return paged && idLess(items[i], items[j], s.Direction)
 	})
 }
 
-// textOf renders a looked-up value to the text form used for lexical ordering,
-// matching how the SQL backend extracts a jsonb field as text.
+func idLess(a, b *ember.MarshaledEntity, d ember.Direction) bool {
+	if d == ember.DirectionDescending {
+		return b.ID < a.ID
+	}
+	return a.ID < b.ID
+}
+
+func seek(items []*ember.MarshaledEntity, s ember.Sort, c ember.Cursor) ([]*ember.MarshaledEntity, error) {
+	if s.Path != "" && c.Value == nil {
+		return nil, fmt.Errorf("%w: sorted cursor requires a value", ember.ErrInvalidCursor)
+	}
+	if s.Path != "" && valueKey(c.Value) == "?" {
+		return nil, fmt.Errorf("%w: value type %T", ember.ErrInvalidCursor, c.Value)
+	}
+
+	out := make([]*ember.MarshaledEntity, 0, len(items))
+	for _, m := range items {
+		if afterCursor(m, s, c) {
+			out = append(out, m)
+		}
+	}
+
+	return out, nil
+}
+
+func afterCursor(m *ember.MarshaledEntity, s ember.Sort, c ember.Cursor) bool {
+	if s.Path == "" {
+		return m.ID > c.ID
+	}
+
+	idAfter := m.ID > c.ID
+	if s.Direction == ember.DirectionDescending {
+		idAfter = m.ID < c.ID
+	}
+
+	v, ok, err := lookup(m, s.Path)
+	if err != nil || !ok {
+		return false
+	}
+
+	if lessThan(v, c.Value, s) {
+		return s.Direction == ember.DirectionDescending
+	}
+	if lessThan(c.Value, v, s) {
+		return s.Direction != ember.DirectionDescending
+	}
+
+	return idAfter
+}
+
+func lessThan(a, b any, s ember.Sort) bool {
+	_, reserved := reservedPaths[s.Path]
+	if reserved || s.Ordering == ember.OrderingNumeric {
+		c, ok := orderJSON(a, b)
+		return ok && c < 0
+	}
+	return textOf(a) < textOf(b)
+}
+
 func textOf(v any) string {
 	if s, ok := toStr(v); ok {
 		return s
@@ -113,10 +176,10 @@ func toFloat(v any) (float64, bool) {
 		return x, true
 	case float32:
 		return float64(x), true
-	case int:
-		return float64(x), true
-	case int64:
-		return float64(x), true
+	case int, int8, int16, int32, int64:
+		return float64(reflect.ValueOf(x).Int()), true
+	case uint, uint8, uint16, uint32, uint64:
+		return float64(reflect.ValueOf(x).Uint()), true
 	}
 	return 0, false
 }

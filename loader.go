@@ -22,8 +22,16 @@ func (l *EntityLoader[E]) Get(ctx context.Context, id string) (E, error) {
 }
 
 func (l *EntityLoader[E]) List(ctx context.Context, f Filter, sort Sort) ([]E, error) {
+	return l.ListPage(ctx, f, sort, Unpaged())
+}
+
+func (l *EntityLoader[E]) ListPage(ctx context.Context, f Filter, sort Sort, p Page) ([]E, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+
 	var empty E
-	ms, err := l.repository.List(ctx, empty.Type(), f, sort)
+	ms, err := l.repository.List(ctx, empty.Type(), f, sort, p)
 	if err != nil {
 		return nil, err
 	}

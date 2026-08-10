@@ -25,6 +25,10 @@ func (s *EntityStore[E]) List(ctx context.Context, f Filter, sort Sort) ([]E, er
 	return s.loader.List(ctx, f, sort)
 }
 
+func (s *EntityStore[E]) ListPage(ctx context.Context, f Filter, sort Sort, p Page) ([]E, error) {
+	return s.loader.ListPage(ctx, f, sort, p)
+}
+
 // Save returning an error wrapping ErrDeliveryFailed means the write
 // committed and only delivery failed — do not retry.
 func (s *EntityStore[E]) Save(ctx context.Context, e E) error {
