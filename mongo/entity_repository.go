@@ -10,21 +10,7 @@ import (
 	"github.com/klemen-forstneric/ember"
 )
 
-// EntityRepository stores entities keyed by (type, entity_id). _id is a
-// meaningless surrogate; EnsureEntities builds the index that enforces the key.
-type EntityRepository struct {
-	collection *mongo.Collection
-}
-
-// NewEntityRepository provisions the key before returning, so a repository
-// cannot exist without the index its optimistic lock rides on.
-func NewEntityRepository(ctx context.Context, c *mongo.Collection) (*EntityRepository, error) {
-	if err := EnsureEntities(ctx, c); err != nil {
-		return nil, err
-	}
-	return &EntityRepository{collection: c}, nil
-}
-
+// document
 type document struct {
 	EntityID string   `bson:"entity_id"`
 	Type     string   `bson:"type"`
@@ -32,7 +18,7 @@ type document struct {
 	Data     bson.Raw `bson:"data"`
 }
 
-func (d document) entity() (*ember.MarshaledEntity, error) {
+func (d document) NewMarshaledEntity() (*ember.MarshaledEntity, error) {
 	data, err := bson.MarshalExtJSON(d.Data, false, false)
 	if err != nil {
 		return nil, err
@@ -43,6 +29,18 @@ func (d document) entity() (*ember.MarshaledEntity, error) {
 		Version: ember.NewVersion(d.Version),
 		Data:    data,
 	}, nil
+}
+
+// EntityRepository
+type EntityRepository struct {
+	collection *mongo.Collection
+}
+
+func NewEntityRepository(ctx context.Context, c *mongo.Collection) (*EntityRepository, error) {
+	if err := EnsureEntities(ctx, c); err != nil {
+		return nil, err
+	}
+	return &EntityRepository{collection: c}, nil
 }
 
 func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) error {
@@ -94,7 +92,7 @@ func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.Mars
 		return nil, err
 	}
 
-	return d.entity()
+	return d.NewMarshaledEntity()
 }
 
 func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter, s ember.Sort, p ember.Page) ([]*ember.MarshaledEntity, error) {
@@ -141,7 +139,7 @@ func (r *EntityRepository) List(ctx context.Context, typ string, f ember.Filter,
 			return nil, err
 		}
 
-		m, err := d.entity()
+		m, err := d.NewMarshaledEntity()
 		if err != nil {
 			return nil, err
 		}

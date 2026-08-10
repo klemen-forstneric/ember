@@ -15,6 +15,55 @@ var (
 	ErrInvalidCursor = errors.New("ember: invalid cursor")
 )
 
+// Page
+type Page struct {
+	Limit  int
+	Offset int
+	Cursor Cursor
+}
+
+func Unpaged() Page { return Page{} }
+
+func Limit(n int) Page { return Page{Limit: n} }
+
+func (p Page) Skip(n int) Page {
+	p.Offset = n
+	return p
+}
+
+func (p Page) After(value any, id string) Page {
+	p.Cursor = Cursor{Value: value, ID: id}
+	return p
+}
+
+func (p Page) AfterCursor(c Cursor) Page {
+	p.Cursor = c
+	return p
+}
+
+func (p Page) IsZero() bool {
+	return p.Limit == 0 && p.Offset == 0 && p.Cursor.IsZero()
+}
+
+func (p Page) Validate() error {
+	if p.Limit < 0 {
+		return fmt.Errorf("%w: negative limit %d", ErrInvalidPage, p.Limit)
+	}
+	if p.Offset < 0 {
+		return fmt.Errorf("%w: negative offset %d", ErrInvalidPage, p.Offset)
+	}
+	if p.Offset > 0 && !p.Cursor.IsZero() {
+		return fmt.Errorf("%w: offset and cursor are mutually exclusive", ErrInvalidPage)
+	}
+	if p.Limit == 0 && (p.Offset > 0 || !p.Cursor.IsZero()) {
+		return fmt.Errorf("%w: offset or cursor requires a limit", ErrInvalidPage)
+	}
+	if p.Cursor.ID == "" && p.Cursor.Value != nil {
+		return fmt.Errorf("%w: cursor value without id", ErrInvalidPage)
+	}
+	return nil
+}
+
 // Cursor
 type Cursor struct {
 	Value any
@@ -121,54 +170,5 @@ func (c *Cursor) UnmarshalText(b []byte) error {
 
 	c.ID = w.ID
 
-	return nil
-}
-
-// Page
-type Page struct {
-	Limit  int
-	Offset int
-	Cursor Cursor
-}
-
-func Unpaged() Page { return Page{} }
-
-func Limit(n int) Page { return Page{Limit: n} }
-
-func (p Page) Skip(n int) Page {
-	p.Offset = n
-	return p
-}
-
-func (p Page) After(value any, id string) Page {
-	p.Cursor = Cursor{Value: value, ID: id}
-	return p
-}
-
-func (p Page) AfterCursor(c Cursor) Page {
-	p.Cursor = c
-	return p
-}
-
-func (p Page) IsZero() bool {
-	return p.Limit == 0 && p.Offset == 0 && p.Cursor.IsZero()
-}
-
-func (p Page) Validate() error {
-	if p.Limit < 0 {
-		return fmt.Errorf("%w: negative limit %d", ErrInvalidPage, p.Limit)
-	}
-	if p.Offset < 0 {
-		return fmt.Errorf("%w: negative offset %d", ErrInvalidPage, p.Offset)
-	}
-	if p.Offset > 0 && !p.Cursor.IsZero() {
-		return fmt.Errorf("%w: offset and cursor are mutually exclusive", ErrInvalidPage)
-	}
-	if p.Limit == 0 && (p.Offset > 0 || !p.Cursor.IsZero()) {
-		return fmt.Errorf("%w: offset or cursor requires a limit", ErrInvalidPage)
-	}
-	if p.Cursor.ID == "" && p.Cursor.Value != nil {
-		return fmt.Errorf("%w: cursor value without id", ErrInvalidPage)
-	}
 	return nil
 }
