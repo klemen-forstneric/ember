@@ -82,14 +82,14 @@ func TestListQueryPlaceholders(t *testing.T) {
 	require.NoError(t, err, "buildPredicate")
 
 	gotSQL, gotArgs, err := psql.
-		Select("id", "version", "data").
+		Select(documentColumns...).
 		From("entities").
 		Where(sq.Eq{"type": "order"}).
 		Where(pred).
 		ToSql()
 	require.NoError(t, err, "ToSql")
 
-	wantSQL := "SELECT id, version, data FROM entities WHERE type = $1 AND " +
+	wantSQL := "SELECT id, type, version, data FROM entities WHERE type = $1 AND " +
 		"((data#>>'{status}' IS NOT NULL AND data#>>'{status}' = $2) AND " +
 		"(data#>>'{total}' IS NOT NULL AND (data#>>'{total}')::numeric > $3))"
 	assert.Equal(t, wantSQL, gotSQL, "sql")

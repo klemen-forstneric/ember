@@ -45,3 +45,38 @@ func TestEntitySaveVersionConflict(t *testing.T) {
 	require.ErrorIs(t, err, ember.ErrVersionConflict)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestGetScansDocumentColumnsInOrder(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	mock.ExpectQuery("SELECT id, type, version, data FROM entities").
+		WithArgs("1", "order").
+		WillReturnRows(sqlmock.NewRows(documentColumns).AddRow("1", "order", 7, []byte(`{"n":"a"}`)))
+
+	repo := NewEntityRepository(NewDB(db), "entities")
+	got, err := repo.Get(context.Background(), "order", "1")
+
+	require.NoError(t, err)
+	require.Equal(t, "1", got.ID)
+	require.Equal(t, "order", got.Type)
+	require.Equal(t, uint64(7), got.Version.Value())
+	require.JSONEq(t, `{"n":"a"}`, string(got.Data))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetMissingIsNotFound(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	mock.ExpectQuery("SELECT id, type, version, data FROM entities").
+		WillReturnRows(sqlmock.NewRows(documentColumns))
+
+	repo := NewEntityRepository(NewDB(db), "entities")
+	_, err = repo.Get(context.Background(), "order", "nope")
+
+	require.ErrorIs(t, err, ember.ErrEntityNotFound)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
