@@ -29,17 +29,22 @@ func Idempotent(keyPrefix string, locker Locker, l ember.LoggerCtx) ember.Subscr
 				return nil
 			}
 
+			// Released unless the handler succeeds, a panic included, so the
+			// redelivery runs instead of being skipped as already handled.
+			handled := false
+			defer func() {
+				if handled {
+					return
+				}
+				ctx := context.WithoutCancel(ctx)
+				if relErr := lock.Release(ctx); relErr != nil {
+					l.Warn(ctx, "Failed to release idempotency lock", "event_id", e.ID,
+						"key", key, "error", relErr)
+				}
+			}()
+
 			err = next(ctx, e)
-			if err == nil {
-				return nil
-			}
-
-			ctx = context.WithoutCancel(ctx)
-			if relErr := lock.Release(ctx); relErr != nil {
-				l.Warn(ctx, "Failed to release idempotency lock", "event_id", e.ID,
-					"key", key, "error", relErr)
-			}
-
+			handled = err == nil
 			return err
 		}
 	}
