@@ -8,8 +8,8 @@ import (
 	"github.com/klemen-forstneric/ember"
 )
 
-// PanicRecover nacks an event whose consumer panicked instead of crashing the process.
-func PanicRecover(l ember.LoggerCtx) ember.ConsumeMiddleware {
+// Recover nacks an event whose consumer panicked instead of crashing the process.
+func Recover(l ember.LoggerCtx) ember.ConsumeMiddleware {
 	return func(next ember.ConsumeFunc) ember.ConsumeFunc {
 		return func(ctx context.Context, envelope ember.AckableEventEnvelope) {
 			defer func() {

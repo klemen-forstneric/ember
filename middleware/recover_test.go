@@ -19,11 +19,11 @@ func envelope(acks, nacks *int) ember.AckableEventEnvelope {
 	}
 }
 
-func TestPanicRecover_NacksAPanickingConsumer(t *testing.T) {
+func TestRecover_NacksAPanickingConsumer(t *testing.T) {
 	logger := &mockLogger{}
 	logger.On("Error", mock.Anything, "Consumer panicked", mock.MatchedBy(func(err error) bool { return err != nil }), mock.Anything).Return().Once()
 
-	consume := middleware.PanicRecover(logger)(func(context.Context, ember.AckableEventEnvelope) { panic("boom") })
+	consume := middleware.Recover(logger)(func(context.Context, ember.AckableEventEnvelope) { panic("boom") })
 
 	var acks, nacks int
 	assert.NotPanics(t, func() { consume(context.Background(), envelope(&acks, &nacks)) })
@@ -32,10 +32,10 @@ func TestPanicRecover_NacksAPanickingConsumer(t *testing.T) {
 	logger.AssertExpectations(t)
 }
 
-func TestPanicRecover_LeavesAHealthyConsumerAlone(t *testing.T) {
+func TestRecover_LeavesAHealthyConsumerAlone(t *testing.T) {
 	logger := &mockLogger{}
 	called := false
-	consume := middleware.PanicRecover(logger)(func(_ context.Context, e ember.AckableEventEnvelope) {
+	consume := middleware.Recover(logger)(func(_ context.Context, e ember.AckableEventEnvelope) {
 		called = true
 		e.Ack()
 	})
