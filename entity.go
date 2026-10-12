@@ -52,7 +52,9 @@ type EntityMarshaler[E Entity] interface {
 	Unmarshal(ctx context.Context, m *MarshaledEntity) (E, error)
 }
 
-// EntityRepository persists a concrete entity without prescribing its encoding.
+// EntityRepository loads, saves, and lists a concrete entity without prescribing
+// its encoding. ListPage accepts Unpaged() for an unbounded query; filter and
+// sort paths refer to the adapter's mapped fields.
 // Save must use the transaction on ctx and leave entity state unchanged. Version
 // carries the expected stored version in Initial and the new version in Value.
 // A missing/stale update or duplicate identity returns ErrVersionConflict; Get
@@ -60,6 +62,7 @@ type EntityMarshaler[E Entity] interface {
 type EntityRepository[E Entity] interface {
 	Get(context.Context, string) (E, error)
 	Save(context.Context, E, Version) error
+	ListPage(context.Context, Filter, Sort, Page) ([]E, error)
 }
 
 // DocumentRepository stores serialized snapshots. Use document.NewAdapter to

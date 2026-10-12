@@ -16,7 +16,7 @@ type EntityLoaderSuite struct {
 	ctx       context.Context
 	repo      *mockEntityRepository
 	marshaler *mockEntityMarshaler[*fakeEntity]
-	loader    *Adapter[*fakeEntity]
+	loader    *EntityLoader[*fakeEntity]
 }
 
 func TestEntityLoaderSuite(t *testing.T) { suite.Run(t, new(EntityLoaderSuite)) }
@@ -25,7 +25,7 @@ func (s *EntityLoaderSuite) SetupTest() {
 	s.ctx = context.Background()
 	s.repo = &mockEntityRepository{}
 	s.marshaler = &mockEntityMarshaler[*fakeEntity]{}
-	s.loader = NewAdapter(s.repo, s.marshaler)
+	s.loader = NewEntityLoader(Bind(NewAdapter(s.repo, s.marshaler)))
 }
 
 func (s *EntityLoaderSuite) TearDownTest() {

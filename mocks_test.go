@@ -169,3 +169,12 @@ func (m *mockTypedRepository[E]) Get(ctx context.Context, id string) (E, error) 
 func (m *mockTypedRepository[E]) Save(ctx context.Context, e E, v Version) error {
 	return m.Called(ctx, e, v).Error(0)
 }
+
+func (m *mockTypedRepository[E]) ListPage(ctx context.Context, f Filter, s Sort, p Page) ([]E, error) {
+	args := m.Called(ctx, f, s, p)
+	var entities []E
+	if args.Get(0) != nil {
+		entities = args.Get(0).([]E)
+	}
+	return entities, args.Error(1)
+}

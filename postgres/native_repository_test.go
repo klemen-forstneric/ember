@@ -136,6 +136,7 @@ func TestNativeMappingAndConflictContract(t *testing.T) {
 
 func TestNativeFiltersAndPagination(t *testing.T) {
 	_, r := nativeItems(t)
+	loader := ember.NewEntityLoader(ember.Bind(r))
 	ctx := context.Background()
 	at := time.Now().UTC().Truncate(time.Microsecond)
 	for i, id := range []string{"a", "b", "c", "d", "e"} {
@@ -161,7 +162,7 @@ func TestNativeFiltersAndPagination(t *testing.T) {
 		{ember.Eq("state", nativeState("open")), []string{"a", "b", "c", "d", "e"}},
 		{ember.Gt("at", at.Add(time.Microsecond)), []string{"c", "d", "e"}},
 	} {
-		got, err := r.List(ctx, tc.f, ember.AscLex("id"))
+		got, err := loader.List(ctx, tc.f, ember.AscLex("id"))
 		require.NoError(t, err)
 		require.Equal(t, tc.ids, nativeIDs(got))
 	}
@@ -179,7 +180,7 @@ func TestNativeFiltersAndPagination(t *testing.T) {
 		page := ember.Limit(1)
 		var ids []string
 		for range 7 {
-			got, err := r.ListPage(ctx, nil, tc.sort, page)
+			got, err := loader.ListPage(ctx, nil, tc.sort, page)
 			require.NoError(t, err)
 			if len(got) == 0 {
 				break
@@ -206,14 +207,14 @@ func TestNativeFiltersAndPagination(t *testing.T) {
 		}
 		require.Equal(t, tc.want, ids)
 	}
-	got, err := r.ListPage(ctx, nil, ember.Unsorted(), ember.Limit(2).Skip(2))
+	got, err := loader.ListPage(ctx, nil, ember.Unsorted(), ember.Limit(2).Skip(2))
 	require.NoError(t, err)
 	require.Equal(t, []string{"c", "d"}, nativeIDs(got))
-	_, err = r.List(ctx, ember.Eq("owner'; DROP TABLE items; --", "x"), ember.Unsorted())
+	_, err = loader.List(ctx, ember.Eq("owner'; DROP TABLE items; --", "x"), ember.Unsorted())
 	require.ErrorIs(t, err, ember.ErrUnsupportedFilter)
-	_, err = r.ListPage(ctx, nil, ember.AscNum("rank"), ember.Limit(1).After(nil, "a"))
+	_, err = loader.ListPage(ctx, nil, ember.AscNum("rank"), ember.Limit(1).After(nil, "a"))
 	require.ErrorIs(t, err, ember.ErrInvalidCursor)
-	_, err = r.ListPage(ctx, nil, ember.Unsorted(), ember.Limit(-1))
+	_, err = loader.ListPage(ctx, nil, ember.Unsorted(), ember.Limit(-1))
 	require.ErrorIs(t, err, ember.ErrInvalidPage)
 }
 

@@ -21,6 +21,14 @@ func (s *EntityStore[E]) Get(ctx context.Context, id string) (E, error) {
 	return s.loader.Get(ctx, id)
 }
 
+func (s *EntityStore[E]) List(ctx context.Context, filter Filter, sort Sort) ([]E, error) {
+	return s.loader.List(ctx, filter, sort)
+}
+
+func (s *EntityStore[E]) ListPage(ctx context.Context, filter Filter, sort Sort, page Page) ([]E, error) {
+	return s.loader.ListPage(ctx, filter, sort, page)
+}
+
 // Save returning an error wrapping ErrDeliveryFailed means the write
 // committed and only delivery failed — do not retry.
 func (s *EntityStore[E]) Save(ctx context.Context, e E) error {

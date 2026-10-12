@@ -1,8 +1,10 @@
 # Typed persistence
 
-Ember binds entities to `EntityRepository[E]`. A repository loads an entity by ID
-and saves it using an explicit optimistic-concurrency version. The repository
-owns its encoding and schema; it does not publish events or advance the entity's
+Ember binds entities to `EntityRepository[E]`. A repository loads an entity by ID,
+saves it using an explicit optimistic-concurrency version, and lists it with
+`ListPage(ctx, filter, sort, page)`. These are one repository contract for both
+native Postgres and document adapters. Use `Unpaged()` for unbounded queries.
+The repository owns its encoding and schema; it does not publish events or advance the entity's
 in-memory version.
 
 ```go
@@ -45,14 +47,15 @@ binding := ember.Bind(adapter)
 loader := ember.NewEntityLoader(binding)
 saver := ember.NewEntitySaver(publisher, transactor, logger, binding)
 
-orders, err := adapter.ListPage(ctx,
+orders, err := loader.ListPage(ctx,
     ember.Eq("user_id", userID), ember.AscLex("id"), ember.Limit(50))
 ```
 
 `Bind(repository, marshaler)` becomes `Bind(document.NewAdapter(repository,
 marshaler))`. `NewEntityStore` now takes a typed repository followed by publisher,
-transactor, and logger. `EntityLoader` and `EntityStore` provide `Get` (and the
-store also `Save`); move their former `List`/`ListPage` calls to the document adapter.
+transactor, and logger. `EntityLoader` and `EntityStore` provide `Get`, `List`, and `ListPage`
+(the store also provides `Save`). `List` delegates with `Unpaged()`; existing
+loader/store query calls stay in place.
 Document revision migrations and marshaler behavior remain inside that adapter.
 Mongo and JSONB document saves now reject missing updates with a nonzero expected
 version instead of inserting a new snapshot.
@@ -164,8 +167,8 @@ tables. `EnsureSchema` and `NewEntityRepository` remain the legacy JSONB documen
 API for callers choosing snapshot storage. `NewRepository(db, table, mapper)` is the typed-table
 API.
 
-Auth-service is the first native adopter. Other services remain on their pinned
-Ember versions. Validate Ember and auth together in a temporary Go workspace;
-release the Ember revision before updating auth's module pin. Do not commit a
+Auth-service, user-service, and wallet-service are native adopters. Validate
+each service with Ember in its own temporary Go workspace to preserve that
+service's dependency versions. Release Ember before updating service module pins. Do not commit a
 local filesystem `replace`. Command-result codecs and idempotency middleware are
 independent of the entity persistence format and retain their existing semantics.

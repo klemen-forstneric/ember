@@ -2,9 +2,11 @@ package ember
 
 import (
 	"context"
+	"errors"
+	"testing"
+
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestTypedStore(t *testing.T) {
@@ -19,5 +21,27 @@ func TestTypedStore(t *testing.T) {
 	require.Same(t, e, got)
 	require.NoError(t, s.Save(context.Background(), e))
 	require.Equal(t, uint64(1), e.Version().Value())
+	r.AssertExpectations(t)
+}
+
+func TestTypedStoreListsThroughRepository(t *testing.T) {
+	ctx := context.Background()
+	r := &mockTypedRepository[*fakeEntity]{}
+	e := newFakeEntity("one")
+	f, sort := Eq("name", "one"), AscLex("id")
+	page := Limit(2).After("previous", "previous")
+	failure := errors.New("query failed")
+	r.On("ListPage", ctx, f, sort, Unpaged()).Return([]*fakeEntity{e}, nil).Once()
+	r.On("ListPage", ctx, f, sort, page).Return([]*fakeEntity{e}, nil).Once()
+	r.On("ListPage", ctx, f, sort, Limit(3)).Return(nil, failure).Once()
+	store := NewEntityStore(r, nil, NopTransactor, nil)
+	got, err := store.List(ctx, f, sort)
+	require.NoError(t, err)
+	require.Equal(t, []*fakeEntity{e}, got)
+	got, err = store.ListPage(ctx, f, sort, page)
+	require.NoError(t, err)
+	require.Equal(t, []*fakeEntity{e}, got)
+	_, err = store.ListPage(ctx, f, sort, Limit(3))
+	require.ErrorIs(t, err, failure)
 	r.AssertExpectations(t)
 }
