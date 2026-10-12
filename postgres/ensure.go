@@ -17,6 +17,18 @@ func EnsureSchema(ctx context.Context, pool *sql.DB, entities, outbox string) er
 			data jsonb NOT NULL,
 			PRIMARY KEY (id, type)
 		)`, entities),
+	}
+	for _, stmt := range stmts {
+		if _, err := pool.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return EnsureOutbox(ctx, pool, outbox)
+}
+
+// EnsureOutbox provisions the shared outbox without a document entity table.
+func EnsureOutbox(ctx context.Context, pool *sql.DB, outbox string) error {
+	stmts := []string{
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 			id text PRIMARY KEY,
 			entity_id text NOT NULL,

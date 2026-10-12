@@ -13,6 +13,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/klemen-forstneric/ember"
+	emberdoc "github.com/klemen-forstneric/ember/document"
 	emberjson "github.com/klemen-forstneric/ember/json"
 )
 
@@ -150,7 +151,7 @@ func TestSaveThroughRelayPreservesPerEntityOrder(t *testing.T) {
 		ember.AtLeastOnce(eventRepo),
 	)
 	saver := ember.NewEntitySaver(publisher, NewTransactor(client), nil,
-		ember.Bind[*counter](entityRepo, counterMarshaler{}))
+		ember.Bind[*counter](emberdoc.NewAdapter(entityRepo, counterMarshaler{})))
 
 	a, b := newCounter("a"), newCounter("b")
 	for range 5 {

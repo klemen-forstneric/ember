@@ -11,33 +11,30 @@ import (
 
 type EntitySaverSuite struct {
 	suite.Suite
-	ctx         context.Context
-	entityRepo  *mockEntityRepository
-	entityMarsh *mockEntityMarshaler[*fakeEntity]
-	eventRepo   *mockEventRepository
-	eventMarsh  *mockEventMarshaler
-	sink        *mockSink
-	tx          *mockTransactor
-	saver       *EntitySaver
+	ctx        context.Context
+	entityRepo *mockTypedRepository[*fakeEntity]
+	eventRepo  *mockEventRepository
+	eventMarsh *mockEventMarshaler
+	sink       *mockSink
+	tx         *mockTransactor
+	saver      *EntitySaver
 }
 
 func TestEntitySaverSuite(t *testing.T) { suite.Run(t, new(EntitySaverSuite)) }
 
 func (s *EntitySaverSuite) SetupTest() {
 	s.ctx = context.Background()
-	s.entityRepo = &mockEntityRepository{}
-	s.entityMarsh = &mockEntityMarshaler[*fakeEntity]{}
+	s.entityRepo = &mockTypedRepository[*fakeEntity]{}
 	s.eventRepo = &mockEventRepository{}
 	s.eventMarsh = &mockEventMarshaler{}
 	s.sink = &mockSink{}
 	s.tx = &mockTransactor{}
 	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, AtLeastOnce(s.eventRepo))
-	s.saver = NewEntitySaver(publisher, s.tx, nil, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
+	s.saver = NewEntitySaver(publisher, s.tx, nil, Bind[*fakeEntity](s.entityRepo))
 }
 
 func (s *EntitySaverSuite) TearDownTest() {
 	s.entityRepo.AssertExpectations(s.T())
-	s.entityMarsh.AssertExpectations(s.T())
 	s.eventRepo.AssertExpectations(s.T())
 	s.eventMarsh.AssertExpectations(s.T())
 	s.sink.AssertExpectations(s.T())
@@ -52,9 +49,8 @@ func (s *EntitySaverSuite) TestSaveNoEntitiesIsNoop() {
 
 func (s *EntitySaverSuite) TestSaveSingleNoEventsSkipsTx() {
 	e := newFakeEntity("1")
-	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
-	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
-	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+
+	s.entityRepo.On("Save", mock.Anything, e, e.Version().Inc()).Return(nil)
 
 	err := s.saver.Save(s.ctx, e)
 
@@ -66,11 +62,10 @@ func (s *EntitySaverSuite) TestSaveSingleWithEventsUsesTxAndClears() {
 	e := newFakeEntity("1")
 	evt := fakeEvent{entityID: "1", typ: "Created"}
 	e.Emit(evt)
-	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
+
 	mev := &MarshaledEvent{Type: "Created", Data: []byte(`{}`)}
 	s.tx.On("WithinTx", mock.Anything).Return(nil).Once()
-	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
-	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+	s.entityRepo.On("Save", mock.Anything, e, e.Version().Inc()).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, evt).Return(mev, nil)
 	s.eventRepo.On("Save", mock.Anything, mock.Anything).Return(nil)
 
@@ -92,7 +87,7 @@ func (s *EntitySaverSuite) TestSaveEntityFailureLeavesEntityUntouched() {
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
 	version := e.Version()
 	s.tx.On("WithinTx", mock.Anything).Return(nil).Once()
-	s.entityMarsh.On("Marshal", mock.Anything, e).Return(nil, errors.New("boom"))
+	s.entityRepo.On("Save", mock.Anything, e, e.Version().Inc()).Return(errors.New("boom"))
 
 	err := s.saver.Save(s.ctx, e)
 
@@ -105,10 +100,9 @@ func (s *EntitySaverSuite) TestSaveEventFailureLeavesEntityUntouched() {
 	e := newFakeEntity("1")
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
 	version := e.Version()
-	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
+
 	s.tx.On("WithinTx", mock.Anything).Return(nil).Once()
-	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
-	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+	s.entityRepo.On("Save", mock.Anything, e, e.Version().Inc()).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).Return(nil, errors.New("event boom"))
 
 	err := s.saver.Save(s.ctx, e)
@@ -122,12 +116,11 @@ func (s *EntitySaverSuite) TestSaveCommitErrorLeavesEntityUntouched() {
 	e := newFakeEntity("1")
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
 	version := e.Version()
-	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
+
 	mev := &MarshaledEvent{Type: "Created", Data: []byte(`{}`)}
 	commitErr := errors.New("commit boom")
 	s.tx.On("WithinTx", mock.Anything).Return(commitErr).Once()
-	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
-	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+	s.entityRepo.On("Save", mock.Anything, e, e.Version().Inc()).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).Return(mev, nil)
 	s.eventRepo.On("Save", mock.Anything, mock.Anything).Return(nil)
 
@@ -139,24 +132,20 @@ func (s *EntitySaverSuite) TestSaveCommitErrorLeavesEntityUntouched() {
 }
 
 func (s *EntitySaverSuite) TestSaveTwoTypesOneTx() {
-	repo2 := &mockEntityRepository{}
-	marsh2 := &mockEntityMarshaler[*fakeEntity2]{}
+	repo2 := &mockTypedRepository[*fakeEntity2]{}
 	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, AtLeastOnce(s.eventRepo))
 	saver := NewEntitySaver(publisher, s.tx, nil,
-		Bind[*fakeEntity](s.entityRepo, s.entityMarsh),
-		Bind[*fakeEntity2](repo2, marsh2),
+		Bind[*fakeEntity](s.entityRepo),
+		Bind[*fakeEntity2](repo2),
 	)
 	e1 := newFakeEntity("1")
 	e2 := newFakeEntity2("2")
 	e1.Emit(fakeEvent{entityID: "1", typ: "A"})
-	m1 := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
-	m2 := &MarshaledEntity{ID: "2", Type: "fake2", Version: NewVersion(1)}
+
 	mev := &MarshaledEvent{Type: "A", Data: []byte(`{}`)}
 	s.tx.On("WithinTx", mock.Anything).Return(nil).Once()
-	s.entityMarsh.On("Marshal", mock.Anything, e1).Return(m1, nil)
-	s.entityRepo.On("Save", mock.Anything, m1).Return(nil)
-	marsh2.On("Marshal", mock.Anything, e2).Return(m2, nil)
-	repo2.On("Save", mock.Anything, m2).Return(nil)
+	s.entityRepo.On("Save", mock.Anything, e1, e1.Version().Inc()).Return(nil)
+	repo2.On("Save", mock.Anything, e2, e2.Version().Inc()).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).Return(mev, nil)
 	s.eventRepo.On("Save", mock.Anything, mock.Anything).Return(nil)
 
@@ -167,16 +156,14 @@ func (s *EntitySaverSuite) TestSaveTwoTypesOneTx() {
 	s.Equal(uint64(1), e1.Version().Value())
 	s.Equal(uint64(1), e2.Version().Value())
 	repo2.AssertExpectations(s.T())
-	marsh2.AssertExpectations(s.T())
 }
 
 func (s *EntitySaverSuite) TestSaveStampsVersionAndIndexPerEntity() {
-	repo2 := &mockEntityRepository{}
-	marsh2 := &mockEntityMarshaler[*fakeEntity2]{}
+	repo2 := &mockTypedRepository[*fakeEntity2]{}
 	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, AtLeastOnce(s.eventRepo))
 	saver := NewEntitySaver(publisher, s.tx, nil,
-		Bind[*fakeEntity](s.entityRepo, s.entityMarsh),
-		Bind[*fakeEntity2](repo2, marsh2),
+		Bind[*fakeEntity](s.entityRepo),
+		Bind[*fakeEntity2](repo2),
 	)
 
 	e1 := newFakeEntity("1")
@@ -185,13 +172,9 @@ func (s *EntitySaverSuite) TestSaveStampsVersionAndIndexPerEntity() {
 	e2 := newFakeEntity2("2")
 	e2.Emit(fakeEvent{entityID: "2", typ: "C"})
 
-	m1 := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(6)}
-	m2 := &MarshaledEntity{ID: "2", Type: "fake2", Version: NewVersion(1)}
 	s.tx.On("WithinTx", mock.Anything).Return(nil).Once()
-	s.entityMarsh.On("Marshal", mock.Anything, e1).Return(m1, nil)
-	s.entityRepo.On("Save", mock.Anything, m1).Return(nil)
-	marsh2.On("Marshal", mock.Anything, e2).Return(m2, nil)
-	repo2.On("Save", mock.Anything, m2).Return(nil)
+	s.entityRepo.On("Save", mock.Anything, e1, e1.Version().Inc()).Return(nil)
+	repo2.On("Save", mock.Anything, e2, e2.Version().Inc()).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
 		Return(&MarshaledEvent{Type: "T", Data: []byte(`{}`)}, nil)
 
@@ -206,7 +189,6 @@ func (s *EntitySaverSuite) TestSaveStampsVersionAndIndexPerEntity() {
 	s.Equal([]int{0, 1, 0}, []int{got[0].Index, got[1].Index, got[2].Index})
 	s.Equal([]string{"1", "1", "2"}, []string{got[0].EntityID, got[1].EntityID, got[2].EntityID})
 	repo2.AssertExpectations(s.T())
-	marsh2.AssertExpectations(s.T())
 }
 
 func (s *EntitySaverSuite) TestSaveForeignEventErrors() {
@@ -219,7 +201,7 @@ func (s *EntitySaverSuite) TestSaveForeignEventErrors() {
 	s.Require().ErrorIs(err, ErrForeignEvent)
 	s.Equal(version, e.Version())
 	s.Len(e.events().All(), 1)
-	s.entityRepo.AssertNotCalled(s.T(), "Save", mock.Anything, mock.Anything)
+	s.entityRepo.AssertNotCalled(s.T(), "Save", mock.Anything, mock.Anything, mock.Anything)
 	s.eventRepo.AssertNotCalled(s.T(), "Save", mock.Anything, mock.Anything)
 }
 
@@ -228,7 +210,7 @@ func (s *EntitySaverSuite) TestSaveForeignEventErrors() {
 func (s *EntitySaverSuite) bestEffortSaver(l LoggerCtx) (*EntitySaver, *recordingTransactor) {
 	tx := &recordingTransactor{}
 	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, BestEffort(s.sink))
-	return NewEntitySaver(publisher, tx, l, Bind[*fakeEntity](s.entityRepo, s.entityMarsh)), tx
+	return NewEntitySaver(publisher, tx, l, Bind[*fakeEntity](s.entityRepo)), tx
 }
 
 func (s *EntitySaverSuite) TestBestEffortDeliversAfterCommit() {
@@ -236,9 +218,8 @@ func (s *EntitySaverSuite) TestBestEffortDeliversAfterCommit() {
 
 	e := newFakeEntity("1")
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
-	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
-	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
-	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+
+	s.entityRepo.On("Save", mock.Anything, e, e.Version().Inc()).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
 		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
 	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once().
@@ -255,16 +236,15 @@ func (s *EntitySaverSuite) TestBestEffortDeliversAfterCommit() {
 
 func (s *EntitySaverSuite) TestBestEffortCommitFailureDoesNotDeliver() {
 	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, BestEffort(s.sink))
-	saver := NewEntitySaver(publisher, s.tx, nil, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
+	saver := NewEntitySaver(publisher, s.tx, nil, Bind[*fakeEntity](s.entityRepo))
 
 	e := newFakeEntity("1")
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
 	version := e.Version()
-	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
+
 	commitErr := errors.New("commit boom")
 	s.tx.On("WithinTx", mock.Anything).Return(commitErr).Once()
-	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
-	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+	s.entityRepo.On("Save", mock.Anything, e, e.Version().Inc()).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
 		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
 
@@ -281,13 +261,12 @@ func (s *EntitySaverSuite) TestBestEffortDeliveryIgnoresPostCommitCancellation()
 	ctx, cancel := context.WithCancel(context.Background())
 	tx := &cancelAfterCommitTransactor{cancel: cancel}
 	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, BestEffort(s.sink))
-	saver := NewEntitySaver(publisher, tx, nil, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
+	saver := NewEntitySaver(publisher, tx, nil, Bind[*fakeEntity](s.entityRepo))
 
 	e := newFakeEntity("1")
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
-	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
-	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
-	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+
+	s.entityRepo.On("Save", mock.Anything, e, e.Version().Inc()).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
 		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
 
@@ -309,9 +288,8 @@ func (s *EntitySaverSuite) TestBestEffortDeliveryFailureStillAdvancesEntity() {
 
 	e := newFakeEntity("1")
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
-	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
-	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
-	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+
+	s.entityRepo.On("Save", mock.Anything, e, e.Version().Inc()).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
 		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
 	s.sink.On("Publish", mock.Anything, mock.Anything).Return(errors.New("broker down")).Once()
@@ -333,9 +311,8 @@ func (s *EntitySaverSuite) TestBestEffortWarnsWhenJoiningCallerTx() {
 
 	e := newFakeEntity("1")
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
-	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
-	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
-	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+
+	s.entityRepo.On("Save", mock.Anything, e, e.Version().Inc()).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
 		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
 	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
@@ -354,9 +331,8 @@ func (s *EntitySaverSuite) TestBestEffortSilentWhenEmberOwnsTx() {
 
 	e := newFakeEntity("1")
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
-	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
-	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
-	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+
+	s.entityRepo.On("Save", mock.Anything, e, e.Version().Inc()).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).
 		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
 	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
@@ -371,15 +347,14 @@ func (s *EntitySaverSuite) TestSaveJoinedTxAtLeastOnceDoesNotWarn() {
 	s.tx.inTx = true
 	logger := &mockLogger{}
 	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, AtLeastOnce(s.eventRepo))
-	saver := NewEntitySaver(publisher, s.tx, logger, Bind[*fakeEntity](s.entityRepo, s.entityMarsh))
+	saver := NewEntitySaver(publisher, s.tx, logger, Bind[*fakeEntity](s.entityRepo))
 
 	e := newFakeEntity("1")
 	e.Emit(fakeEvent{entityID: "1", typ: "Created"})
-	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
+
 	mev := &MarshaledEvent{Type: "Created", Data: []byte(`{}`)}
 	s.tx.On("WithinTx", mock.Anything).Return(nil).Once()
-	s.entityMarsh.On("Marshal", mock.Anything, e).Return(m, nil)
-	s.entityRepo.On("Save", mock.Anything, m).Return(nil)
+	s.entityRepo.On("Save", mock.Anything, e, e.Version().Inc()).Return(nil)
 	s.eventMarsh.On("Marshal", mock.Anything, mock.Anything).Return(mev, nil)
 	s.eventRepo.On("Save", mock.Anything, mock.Anything).Return(nil)
 

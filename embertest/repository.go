@@ -16,7 +16,7 @@ func clone(m *ember.MarshaledEntity) *ember.MarshaledEntity {
 	return &c
 }
 
-var _ ember.EntityRepository = (*EntityRepository)(nil)
+var _ ember.DocumentRepository = (*EntityRepository)(nil)
 
 type EntityRepository struct {
 	mu   sync.Mutex

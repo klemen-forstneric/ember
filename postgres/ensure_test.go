@@ -99,11 +99,29 @@ func TestEnsureIndexEnforcesUniqueness(t *testing.T) {
 	require.NoError(t, EnsureIndex(ctx, pool, entities, entities+"_email", true, "email"))
 
 	repo := NewEntityRepository(NewDB(pool), entities)
-	require.NoError(t, repo.Save(ctx, &ember.MarshaledEntity{ID: "i-1", Type: "identity", Version: ember.NewVersion(1), Data: []byte(`{"email":"a@b.test"}`)}))
-	require.Error(t, repo.Save(ctx, &ember.MarshaledEntity{ID: "i-2", Type: "identity", Version: ember.NewVersion(1), Data: []byte(`{"email":"a@b.test"}`)}))
-	require.NoError(t, repo.Save(ctx, &ember.MarshaledEntity{ID: "r-1", Type: "revocation", Version: ember.NewVersion(1), Data: []byte(`{"email":"a@b.test"}`)}))
+	require.NoError(t, repo.Save(ctx, &ember.MarshaledEntity{ID: "i-1", Type: "identity", Version: ember.NewVersion(0).Inc(), Data: []byte(`{"email":"a@b.test"}`)}))
+	require.Error(t, repo.Save(ctx, &ember.MarshaledEntity{ID: "i-2", Type: "identity", Version: ember.NewVersion(0).Inc(), Data: []byte(`{"email":"a@b.test"}`)}))
+	require.NoError(t, repo.Save(ctx, &ember.MarshaledEntity{ID: "r-1", Type: "revocation", Version: ember.NewVersion(0).Inc(), Data: []byte(`{"email":"a@b.test"}`)}))
 }
 
 func TestEnsureIndexRequiresAPath(t *testing.T) {
 	require.Error(t, EnsureIndex(context.Background(), nil, "t", "t_idx", false))
+}
+
+func TestDocumentVersionedUpdateCannotInsertMissingEntity(t *testing.T) {
+	pool := connectTestPostgres(t)
+	ctx := context.Background()
+	entities, outbox := ensureTestTables(t, pool, "ember_missing_update")
+	require.NoError(t, EnsureSchema(ctx, pool, entities, outbox))
+	r := NewEntityRepository(NewDB(pool), entities)
+	m := &ember.MarshaledEntity{ID: "missing", Type: "item", Version: ember.NewVersion(3).Inc(), Data: []byte(`{}`)}
+	require.ErrorIs(t, r.Save(ctx, m), ember.ErrVersionConflict)
+	_, err := r.Get(ctx, "item", "missing")
+	require.ErrorIs(t, err, ember.ErrEntityNotFound)
+	m.Version = ember.NewVersion(0).Inc()
+	require.NoError(t, r.Save(ctx, m))
+	require.ErrorIs(t, r.Save(ctx, m), ember.ErrVersionConflict)
+	m.Version = ember.NewVersion(1).Inc()
+	require.NoError(t, r.Save(ctx, m))
+	require.ErrorIs(t, r.Save(ctx, m), ember.ErrVersionConflict)
 }

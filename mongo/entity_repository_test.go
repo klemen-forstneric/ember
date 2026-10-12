@@ -119,7 +119,7 @@ func (s *EntityRepositorySuite) TestListFiltersByEntityID() {
 }
 
 // Compile-time assertion that the repository satisfies the interface.
-var _ ember.EntityRepository = (*EntityRepository)(nil)
+var _ ember.DocumentRepository = (*EntityRepository)(nil)
 
 func TestListPagingLimitAndSkip(t *testing.T) {
 	col := connectTestMongo(t)
@@ -250,4 +250,13 @@ func TestListPagingCursorValueInvalidWrapsErrInvalidCursor(t *testing.T) {
 
 	_, err = repo.List(ctx, "fake", nil, ember.AscNum("n"), ember.Limit(2).After(time.Duration(1), "idA"))
 	require.ErrorIs(t, err, ember.ErrInvalidCursor)
+}
+
+func (s *EntityRepositorySuite) TestVersionedUpdateCannotInsertMissingEntity() {
+	ctx := context.Background()
+	s.ErrorIs(s.repo.Save(ctx, marshaled("order", "missing", 3, `{}`)), ember.ErrVersionConflict)
+	_, err := s.repo.Get(ctx, "order", "missing")
+	s.ErrorIs(err, ember.ErrEntityNotFound)
+	s.Require().NoError(s.repo.Save(ctx, marshaled("order", "missing", 0, `{}`)))
+	s.ErrorIs(s.repo.Save(ctx, marshaled("order", "missing", 0, `{}`)), ember.ErrVersionConflict)
 }

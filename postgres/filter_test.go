@@ -97,4 +97,4 @@ func TestListQueryPlaceholders(t *testing.T) {
 }
 
 // Compile-time assertion that the repository satisfies the interface.
-var _ ember.EntityRepository = (*EntityRepository)(nil)
+var _ ember.DocumentRepository = (*EntityRepository)(nil)

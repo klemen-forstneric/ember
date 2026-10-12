@@ -7,56 +7,6 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// mockEntityRepository is a testify mock for EntityRepository.
-type mockEntityRepository struct {
-	mock.Mock
-}
-
-func (m *mockEntityRepository) Save(ctx context.Context, me *MarshaledEntity) error {
-	return m.Called(ctx, me).Error(0)
-}
-
-func (m *mockEntityRepository) Get(ctx context.Context, typ, id string) (*MarshaledEntity, error) {
-	args := m.Called(ctx, typ, id)
-	var out *MarshaledEntity
-	if v := args.Get(0); v != nil {
-		out = v.(*MarshaledEntity)
-	}
-	return out, args.Error(1)
-}
-
-func (m *mockEntityRepository) List(ctx context.Context, typ string, f Filter, s Sort, p Page) ([]*MarshaledEntity, error) {
-	args := m.Called(ctx, typ, f, s, p)
-	var out []*MarshaledEntity
-	if v := args.Get(0); v != nil {
-		out = v.([]*MarshaledEntity)
-	}
-	return out, args.Error(1)
-}
-
-// mockEntityMarshaler is a testify mock for EntityMarshaler.
-type mockEntityMarshaler[E Entity] struct {
-	mock.Mock
-}
-
-func (m *mockEntityMarshaler[E]) Marshal(ctx context.Context, e E) (*MarshaledEntity, error) {
-	args := m.Called(ctx, e)
-	var out *MarshaledEntity
-	if v := args.Get(0); v != nil {
-		out = v.(*MarshaledEntity)
-	}
-	return out, args.Error(1)
-}
-
-func (m *mockEntityMarshaler[E]) Unmarshal(ctx context.Context, me *MarshaledEntity) (E, error) {
-	args := m.Called(ctx, me)
-	var out E
-	if v := args.Get(0); v != nil {
-		out = v.(E)
-	}
-	return out, args.Error(1)
-}
-
 // mockEventRepository is a testify double for the outbox, satisfying both
 // EventRepository and PollingRelayRepository.
 type mockEventRepository struct {
@@ -203,4 +153,19 @@ func (m *mockLogger) Warn(ctx context.Context, msg string, kvs ...interface{}) {
 
 func (m *mockLogger) Error(ctx context.Context, msg string, err error, kvs ...interface{}) {
 	m.Called(msg, err)
+}
+
+// mockTypedRepository exercises the native persistence contract.
+type mockTypedRepository[E Entity] struct{ mock.Mock }
+
+func (m *mockTypedRepository[E]) Get(ctx context.Context, id string) (E, error) {
+	args := m.Called(ctx, id)
+	var e E
+	if args.Get(0) != nil {
+		e = args.Get(0).(E)
+	}
+	return e, args.Error(1)
+}
+func (m *mockTypedRepository[E]) Save(ctx context.Context, e E, v Version) error {
+	return m.Called(ctx, e, v).Error(0)
 }

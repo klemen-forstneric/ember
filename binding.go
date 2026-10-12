@@ -2,36 +2,23 @@ package ember
 
 import "context"
 
-// Binding
-type Binding[E Entity] struct {
-	repo      EntityRepository
-	marshaler EntityMarshaler[E]
-}
+// Binding connects one entity type to its persistence adapter.
+type Binding[E Entity] struct{ repo EntityRepository[E] }
 
-func Bind[E Entity](r EntityRepository, m EntityMarshaler[E]) Binding[E] {
-	return Binding[E]{repo: r, marshaler: m}
-}
+func Bind[E Entity](r EntityRepository[E]) Binding[E] { return Binding[E]{repo: r} }
 
-// binder
-type binder interface {
-	binding() binding
-}
-
-// binding
+type binder interface{ binding() binding }
 type binding struct {
-	typ     string
-	repo    EntityRepository
-	marshal func(ctx context.Context, e Entity) (*MarshaledEntity, error)
+	typ  string
+	save func(context.Context, Entity, Version) error
 }
 
 func (b Binding[E]) binding() binding {
 	var zero E
-
 	return binding{
-		typ:  zero.Type(),
-		repo: b.repo,
-		marshal: func(ctx context.Context, e Entity) (*MarshaledEntity, error) {
-			return b.marshaler.Marshal(ctx, e.(E))
+		typ: zero.Type(),
+		save: func(ctx context.Context, e Entity, v Version) error {
+			return b.repo.Save(ctx, e.(E), v)
 		},
 	}
 }

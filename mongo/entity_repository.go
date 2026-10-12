@@ -63,20 +63,26 @@ func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) e
 		Data:     body,
 	}
 
-	_, err := r.collection.ReplaceOne(
+	result, err := r.collection.ReplaceOne(
 		ctx,
 		filter,
 		replacement,
-		options.Replace().SetUpsert(true),
+		options.Replace().SetUpsert(m.Version.Initial() == 0),
 	)
 
-	// Missing on version falls through to an insert, which the unique
-	// (type, entity_id) index rejects: the row exists at another version.
+	// A duplicate initial insert conflicts with the type-scoped identity index.
+	// Nonzero expected versions update only; they must never recreate a missing entity.
 	if mongo.IsDuplicateKeyError(err) {
 		return ember.ErrVersionConflict
 	}
 
-	return err
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 && result.UpsertedCount == 0 {
+		return ember.ErrVersionConflict
+	}
+	return nil
 }
 
 func (r *EntityRepository) Get(ctx context.Context, typ, id string) (*ember.MarshaledEntity, error) {

@@ -2,24 +2,20 @@ package ember
 
 import (
 	"context"
-	"testing"
-
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"testing"
 )
 
-func TestBindingReportsTypeAndMarshals(t *testing.T) {
-	repo := &mockEntityRepository{}
-	marshaler := &mockEntityMarshaler[*fakeEntity]{}
-	b := Bind[*fakeEntity](repo, marshaler).binding()
-
-	require.Equal(t, "fake", b.typ) // fakeEntity.Type() == "fake"
-
-	e := newFakeEntity("1")
-	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(1)}
-	marshaler.On("Marshal", mock.Anything, e).Return(m, nil)
-	got, err := b.marshal(context.Background(), e)
-	require.NoError(t, err)
-	require.Same(t, m, got)
-	marshaler.AssertExpectations(t)
+func TestBindingReportsTypeAndSaves(t *testing.T) {
+	r := &mockTypedRepository[*fakeEntity]{}
+	e := newFakeEntity("one")
+	v := NewVersion(0).Inc()
+	r.On("Save", mock.Anything, e, v).Return(nil).Run(func(mock.Arguments) {
+		require.Equal(t, uint64(0), e.Version().Value(), "adapter gets proposed version separately")
+	})
+	b := Bind(r).binding()
+	require.Equal(t, "fake", b.typ)
+	require.NoError(t, b.save(context.Background(), e, v))
+	r.AssertExpectations(t)
 }

@@ -21,7 +21,7 @@ type Entity interface {
 
 // EntityRoot supplies identity, optimistic-concurrency version, and a domain-
 // event buffer to an entity. None of these are serialized here — persistence is
-// owned by a per-entity marshaler.
+// owned by the persistence adapter.
 type EntityRoot struct {
 	i string
 	v Version
@@ -52,8 +52,19 @@ type EntityMarshaler[E Entity] interface {
 	Unmarshal(ctx context.Context, m *MarshaledEntity) (E, error)
 }
 
-// EntityRepository
-type EntityRepository interface {
+// EntityRepository persists a concrete entity without prescribing its encoding.
+// Save must use the transaction on ctx and leave entity state unchanged. Version
+// carries the expected stored version in Initial and the new version in Value.
+// A missing/stale update or duplicate identity returns ErrVersionConflict; Get
+// returns ErrEntityNotFound when the identity is absent.
+type EntityRepository[E Entity] interface {
+	Get(context.Context, string) (E, error)
+	Save(context.Context, E, Version) error
+}
+
+// DocumentRepository stores serialized snapshots. Use document.NewAdapter to
+// bind one to an EntitySaver or to query it through a typed document API.
+type DocumentRepository interface {
 	Save(ctx context.Context, m *MarshaledEntity) error
 	Get(ctx context.Context, typ, id string) (*MarshaledEntity, error)
 	List(ctx context.Context, typ string, f Filter, s Sort, p Page) ([]*MarshaledEntity, error)

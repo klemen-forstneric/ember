@@ -2,49 +2,13 @@ package ember
 
 import "context"
 
-// EntityLoader reads entities of a single type.
-type EntityLoader[E Entity] struct {
-	repository EntityRepository
-	marshaler  EntityMarshaler[E]
-}
+// EntityLoader reads entities of a single type. Domain repositories own queries.
+type EntityLoader[E Entity] struct{ repository EntityRepository[E] }
 
 func NewEntityLoader[E Entity](b Binding[E]) *EntityLoader[E] {
-	return &EntityLoader[E]{repository: b.repo, marshaler: b.marshaler}
+	return &EntityLoader[E]{repository: b.repo}
 }
 
 func (l *EntityLoader[E]) Get(ctx context.Context, id string) (E, error) {
-	var empty E
-	m, err := l.repository.Get(ctx, empty.Type(), id)
-	if err != nil {
-		return empty, err
-	}
-	return l.marshaler.Unmarshal(ctx, m)
-}
-
-func (l *EntityLoader[E]) List(ctx context.Context, f Filter, sort Sort) ([]E, error) {
-	return l.ListPage(ctx, f, sort, Unpaged())
-}
-
-func (l *EntityLoader[E]) ListPage(ctx context.Context, f Filter, sort Sort, p Page) ([]E, error) {
-	if err := p.Validate(); err != nil {
-		return nil, err
-	}
-
-	var empty E
-	ms, err := l.repository.List(ctx, empty.Type(), f, sort, p)
-	if err != nil {
-		return nil, err
-	}
-
-	es := make([]E, 0, len(ms))
-	for _, m := range ms {
-		e, err := l.marshaler.Unmarshal(ctx, m)
-		if err != nil {
-			return nil, err
-		}
-
-		es = append(es, e)
-	}
-
-	return es, nil
+	return l.repository.Get(ctx, id)
 }

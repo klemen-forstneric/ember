@@ -31,6 +31,9 @@ func NewEntitySaver(p *Publisher, tx Transactor, l LoggerCtx, bindings ...binder
 	return &EntitySaver{bindings: m, publisher: p, tx: tx, logger: l}
 }
 
+// Save finalizes in-memory versions and event buffers when its transaction call
+// succeeds. If it joins a caller-owned transaction, this precedes the outer
+// commit: discard/reload those entities if the caller subsequently rolls back.
 // Save returning an error wrapping ErrDeliveryFailed means the write
 // committed and only delivery failed — do not retry, or the entity is saved twice.
 func (s *EntitySaver) Save(ctx context.Context, es ...Entity) error {
@@ -115,13 +118,7 @@ func (s *EntitySaver) save(ctx context.Context, e Entity) (Version, error) {
 
 	prev := e.Version()
 	next := prev.Inc()
-	e.SetVersion(next)
-	m, err := b.marshal(ctx, e)
-	e.SetVersion(prev)
-	if err != nil {
-		return prev, err
-	}
-	if err := b.repo.Save(ctx, m); err != nil {
+	if err := b.save(ctx, e, next); err != nil {
 		return prev, err
 	}
 	return NewVersion(next.Value()), nil

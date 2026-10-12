@@ -40,15 +40,19 @@ func NewEntityRepository(db *DB, table string) *EntityRepository {
 }
 
 func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) error {
-	query, args, err := psql.
-		Insert(r.table).
-		Columns("id", "type", "version", "data").
-		Values(m.ID, m.Type, m.Version.Value(), m.Data).
-		Suffix(
-			"ON CONFLICT (id, type) DO UPDATE SET version = ?, data = ? WHERE "+r.table+".version = ?",
-			m.Version.Value(), m.Data, m.Version.Initial(),
-		).
-		ToSql()
+	var query string
+	var args []any
+	var err error
+	if m.Version.Initial() == 0 {
+		query, args, err = psql.Insert(r.table).
+			Columns("id", "type", "version", "data").
+			Values(m.ID, m.Type, m.Version.Value(), m.Data).
+			Suffix("ON CONFLICT (id, type) DO NOTHING").ToSql()
+	} else {
+		query, args, err = psql.Update(r.table).
+			Set("version", m.Version.Value()).Set("data", m.Data).
+			Where(sq.Eq{"id": m.ID, "type": m.Type, "version": m.Version.Initial()}).ToSql()
+	}
 	if err != nil {
 		return err
 	}
