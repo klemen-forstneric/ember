@@ -90,12 +90,10 @@ func (r *RetryingSink) Publish(ctx context.Context, envelopes []ember.EventEnvel
 	}
 
 	for _, e := range envelopes {
-		elapsed := time.Since(e.Timestamp)
-
-		r.logger.Info(ctx, "Published event", "eventId", e.ID, "type", e.Event.Type,
+		r.logger.Info(ctx, "Published event", "event_id", e.ID, "type", e.Event.Type,
 			"entity_id", e.EntityID, "payload", json.RawMessage(e.Event.Data),
 			"metadata", e.Metadata, "timestamp", e.Timestamp,
-			"elapsed_ms", elapsed.Milliseconds())
+			"lag", time.Since(e.Timestamp))
 	}
 	return nil
 }

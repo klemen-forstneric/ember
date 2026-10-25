@@ -112,12 +112,10 @@ func (r *PollingRelay) publish(ctx context.Context) (int, error) {
 		}
 
 		for _, e := range es {
-			elapsed := time.Since(e.Timestamp)
-
 			r.logger.Info(ctx, "Published event", "event_id", e.ID, "type", e.Event.Type,
 				"entity_id", e.EntityID, "payload", json.RawMessage(e.Event.Data),
 				"metadata", e.Metadata, "timestamp", e.Timestamp,
-				"elapsed_ms", elapsed.Milliseconds())
+				"lag", time.Since(e.Timestamp))
 
 			ids = append(ids, e.ID)
 		}
