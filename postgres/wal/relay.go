@@ -340,7 +340,7 @@ func (r *Relay) publish(ctx context.Context, conn replConn, batch []ember.EventE
 		if err == nil {
 			for _, e := range batch {
 				r.logger.Info(ctx, "Published event", "event_id", e.ID, "type", e.Event.Type,
-					"entity_id", e.EntityID, "elapsed_ms", time.Since(e.Timestamp).Milliseconds())
+					"entity_id", e.EntityID, "lag", time.Since(e.Timestamp))
 			}
 			return nil
 		}

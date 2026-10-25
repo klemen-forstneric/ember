@@ -101,7 +101,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, sub Subscription, m ...Subsc
 
 		s.logger.Info(ctx, "Event processed", "event_id", envelope.ID,
 			"type", envelope.Event.Type, "entity_id", envelope.EntityID, "handler", sub.Name(),
-			"elapsed_time", time.Since(startTime), "error", err)
+			"duration", time.Since(startTime), "error", err)
 	}
 
 	s.consumer.Run(ctx, sub.Name(), ch, consume)
