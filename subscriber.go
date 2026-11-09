@@ -7,7 +7,8 @@ import (
 )
 
 var (
-	ErrUnknownEvent = errors.New("unknown event")
+	ErrUnknownEvent           = errors.New("unknown event")
+	ErrUnsubscribeUnsupported = errors.New("source cannot unsubscribe")
 )
 
 // HandleFunc
@@ -37,6 +38,12 @@ type Subscription interface {
 type Source interface {
 	Subscribe(ctx context.Context, name string) (<-chan AckableEventEnvelope, error)
 	Stop()
+}
+
+// Unsubscriber is a Source that can end one subscription at runtime. It closes
+// the subscription's channel, which ends the consumer's Run for it.
+type Unsubscriber interface {
+	Unsubscribe(name string) error
 }
 
 // Subscriber
@@ -106,6 +113,15 @@ func (s *Subscriber) Subscribe(ctx context.Context, sub Subscription, m ...Subsc
 
 	s.consumer.Run(ctx, sub.Name(), ch, consume)
 	return nil
+}
+
+// Unsubscribe ends one subscription; events already handed to its consumer still finish.
+func (s *Subscriber) Unsubscribe(name string) error {
+	u, ok := s.source.(Unsubscriber)
+	if !ok {
+		return ErrUnsubscribeUnsupported
+	}
+	return u.Unsubscribe(name)
 }
 
 func (s *Subscriber) Stop() {

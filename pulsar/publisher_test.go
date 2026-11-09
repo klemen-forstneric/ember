@@ -50,7 +50,7 @@ func (s *PublisherSuite) SetupTest() {
 func (s *PublisherSuite) TestRoutesByEventType() {
 	prod := &mockProducer{}
 	prod.On("SendAsync", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
+	s.reg.On("Get", mock.Anything, "order.created", "e1").Return(prod, nil)
 	p := NewPublisher(s.reg, 0)
 
 	err := p.Publish(context.Background(), envelope("order.created", "e1"))
@@ -62,7 +62,7 @@ func (s *PublisherSuite) TestRoutesByEventType() {
 }
 
 func (s *PublisherSuite) TestUnmappedTypeErrors() {
-	s.reg.On("Get", mock.Anything, "payment.refunded").Return(nil, errors.New("unmapped event type"))
+	s.reg.On("Get", mock.Anything, "payment.refunded", mock.Anything).Return(nil, errors.New("unmapped event type"))
 	p := NewPublisher(s.reg, 0)
 
 	err := p.Publish(context.Background(), envelope("payment.refunded", "e1"))
@@ -84,7 +84,7 @@ func (s *PublisherSuite) TestMissingCorrelationIDErrors() {
 func (s *PublisherSuite) TestAggregatesSendErrors() {
 	prod := &mockProducer{}
 	prod.On("SendAsync", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("boom"))
-	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
+	s.reg.On("Get", mock.Anything, "order.created", mock.Anything).Return(prod, nil)
 	p := NewPublisher(s.reg, 0)
 
 	err := p.Publish(context.Background(), envelope("order.created", "e1"))
@@ -99,7 +99,7 @@ func (s *PublisherSuite) TestFailingSendReturnsError() {
 	prod.On("SendAsync", mock.Anything, mock.MatchedBy(func(m *pulsar.ProducerMessage) bool {
 		return m.Key == "e2"
 	}), mock.Anything).Return(nil)
-	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
+	s.reg.On("Get", mock.Anything, "order.created", mock.Anything).Return(prod, nil)
 	p := NewPublisher(s.reg, 0)
 
 	err := p.Publish(context.Background(), twoEnvelopes("order.created"))
@@ -109,7 +109,7 @@ func (s *PublisherSuite) TestFailingSendReturnsError() {
 func (s *PublisherSuite) TestFullySuccessfulBatchReturnsNil() {
 	prod := &mockProducer{}
 	prod.On("SendAsync", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
+	s.reg.On("Get", mock.Anything, "order.created", mock.Anything).Return(prod, nil)
 	p := NewPublisher(s.reg, 0)
 
 	err := p.Publish(context.Background(), twoEnvelopes("order.created"))
@@ -118,7 +118,7 @@ func (s *PublisherSuite) TestFullySuccessfulBatchReturnsNil() {
 
 func (s *PublisherSuite) TestOversizedEnvelopeRejectedBeforeAnySend() {
 	prod := &mockProducer{}
-	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
+	s.reg.On("Get", mock.Anything, "order.created", mock.Anything).Return(prod, nil)
 	p := NewPublisher(s.reg, 10) // 10-byte max, well under the marshaled envelope size
 
 	err := p.Publish(context.Background(), envelope("order.created", "e1"))

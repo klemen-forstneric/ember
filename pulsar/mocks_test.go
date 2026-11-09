@@ -113,8 +113,8 @@ type mockProducerRegistry struct {
 	mock.Mock
 }
 
-func (m *mockProducerRegistry) Get(ctx context.Context, eventType string) (producer, error) {
-	args := m.Called(ctx, eventType)
+func (m *mockProducerRegistry) Get(ctx context.Context, eventType, entityID string) (producer, error) {
+	args := m.Called(ctx, eventType, entityID)
 	var p producer
 	if v := args.Get(0); v != nil {
 		p = v.(producer)
@@ -184,6 +184,10 @@ func (m *mockConsumerRegistry) Get(ctx context.Context, subscription string) ([]
 		cs = v.([]consumer)
 	}
 	return cs, args.Error(1)
+}
+
+func (m *mockConsumerRegistry) Release(subscription string) {
+	m.Called(subscription)
 }
 
 func (m *mockConsumerRegistry) Close() error {

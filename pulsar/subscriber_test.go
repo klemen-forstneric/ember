@@ -169,3 +169,41 @@ func (s *SubscriberSuite) TestStopClosesRegistry() {
 
 	s.reg.AssertNumberOfCalls(s.T(), "Close", 1)
 }
+
+func (s *SubscriberSuite) TestUnsubscribeClosesTheChannelAndReleasesConsumers() {
+	out := s.start(s.newConsumer(1, true))
+	s.reg.On("Release", "projector").Return()
+
+	s.Require().NoError(s.sub.Unsubscribe("projector"))
+
+	select {
+	case _, ok := <-out:
+		s.False(ok, "channel closed")
+	case <-time.After(time.Second):
+		s.FailNow("channel not closed")
+	}
+	s.reg.AssertCalled(s.T(), "Release", "projector")
+}
+
+func (s *SubscriberSuite) TestUnsubscribedNameCanBeSubscribedAgain() {
+	s.start(s.newConsumer(1, true))
+	s.reg.On("Release", "projector").Return()
+	s.Require().NoError(s.sub.Unsubscribe("projector"))
+
+	_, err := s.sub.Subscribe(context.Background(), "projector")
+
+	s.Require().NoError(err)
+}
+
+func (s *SubscriberSuite) TestSubscribingTwiceToOneNameErrors() {
+	s.start(s.newConsumer(1, true))
+
+	_, err := s.sub.Subscribe(context.Background(), "projector")
+
+	s.ErrorContains(err, "already subscribed")
+}
+
+func (s *SubscriberSuite) TestUnsubscribeUnknownNameErrors() {
+	s.ErrorContains(s.sub.Unsubscribe("nope"), "not subscribed")
+	s.reg.AssertNotCalled(s.T(), "Release", mock.Anything)
+}

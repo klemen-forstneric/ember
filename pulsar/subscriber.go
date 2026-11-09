@@ -3,6 +3,7 @@ package pulsar
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	"github.com/klemen-forstneric/ember"
@@ -11,13 +12,17 @@ import (
 // Subscriber is the Pulsar implementation of ember.Source. It resolves a
 // subscription name to one or more consumers via the registry and fans their
 // messages into a single channel.
-var _ ember.Source = (*Subscriber)(nil)
+var (
+	_ ember.Source       = (*Subscriber)(nil)
+	_ ember.Unsubscriber = (*Subscriber)(nil)
+)
 
 // consumerRegistry resolves the consumers for a subscription name (fan-in:
 // one subscription may map to several consumers). Get returns an error for an
 // unknown subscription.
 type consumerRegistry interface {
 	Get(ctx context.Context, subscription string) ([]consumer, error)
+	Release(subscription string)
 	Close() error
 }
 
@@ -27,6 +32,15 @@ type Subscriber struct {
 
 	shutdown chan struct{}
 	wg       sync.WaitGroup
+
+	mu   sync.Mutex
+	subs map[string]*subscription
+}
+
+// subscription is one name's pumps; closing done stops them and closes its channel.
+type subscription struct {
+	done chan struct{}
+	wg   sync.WaitGroup
 }
 
 func NewSubscriber(r consumerRegistry, l ember.LoggerCtx) *Subscriber {
@@ -34,12 +48,25 @@ func NewSubscriber(r consumerRegistry, l ember.LoggerCtx) *Subscriber {
 		registry: r,
 		logger:   l,
 		shutdown: make(chan struct{}),
+		subs:     map[string]*subscription{},
 	}
 }
 
 func (s *Subscriber) Subscribe(ctx context.Context, name string) (<-chan ember.AckableEventEnvelope, error) {
+	s.mu.Lock()
+	if _, ok := s.subs[name]; ok {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("already subscribed to %q", name)
+	}
+	sub := &subscription{done: make(chan struct{})}
+	s.subs[name] = sub
+	s.mu.Unlock()
+
 	consumers, err := s.registry.Get(ctx, name)
 	if err != nil {
+		s.mu.Lock()
+		delete(s.subs, name)
+		s.mu.Unlock()
 		return nil, err
 	}
 
@@ -47,8 +74,10 @@ func (s *Subscriber) Subscribe(ctx context.Context, name string) (<-chan ember.A
 
 	for _, c := range consumers {
 		s.wg.Add(1)
+		sub.wg.Add(1)
 		go func(c consumer) {
 			defer s.wg.Done()
+			defer sub.wg.Done()
 
 			for {
 				select {
@@ -93,15 +122,41 @@ func (s *Subscriber) Subscribe(ctx context.Context, name string) (<-chan ember.A
 					case out <- envelope:
 					case <-s.shutdown:
 						return
+					case <-sub.done:
+						return
 					}
 				case <-s.shutdown:
+					return
+				case <-sub.done:
 					return
 				}
 			}
 		}(c)
 	}
 
+	// Closing the channel tells the consumer reading it that the subscription ended.
+	go func() {
+		sub.wg.Wait()
+		close(out)
+	}()
+
 	return out, nil
+}
+
+// Unsubscribe stops one subscription's delivery, closes its channel and releases its consumers.
+func (s *Subscriber) Unsubscribe(name string) error {
+	s.mu.Lock()
+	sub, ok := s.subs[name]
+	delete(s.subs, name)
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("not subscribed to %q", name)
+	}
+
+	close(sub.done)
+	sub.wg.Wait() // the pumps stop reading before their consumers close
+	s.registry.Release(name)
+	return nil
 }
 
 func (s *Subscriber) Stop() {

@@ -35,25 +35,50 @@ func (c pulsarConsumer) MaxDeliveries() (int, bool) { return c.maxDeliveries, c.
 
 // ConsumerRegistry maps a subscription name to one or more consumers,
 // created eagerly from the configured pulsar.ConsumerOptions on Get.
+// Subscriptions can also be registered and released at runtime.
 type ConsumerRegistry struct {
 	client pulsar.Client
-	config map[string][]pulsar.ConsumerOptions
 
 	mu        sync.Mutex
-	consumers []consumer
+	config    map[string][]pulsar.ConsumerOptions
+	consumers map[string][]consumer // subscription -> consumers
 }
 
 func NewConsumerRegistry(
 	client pulsar.Client,
 	config map[string][]pulsar.ConsumerOptions,
 ) *ConsumerRegistry {
-	return &ConsumerRegistry{client: client, config: config}
+	if config == nil {
+		config = map[string][]pulsar.ConsumerOptions{}
+	}
+	return &ConsumerRegistry{client: client, config: config, consumers: map[string][]consumer{}}
+}
+
+// Register adds a subscription's consumer options at runtime.
+func (r *ConsumerRegistry) Register(subscription string, opts ...pulsar.ConsumerOptions) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.config[subscription] = opts
+}
+
+// Release closes a subscription's consumers and forgets the subscription.
+func (r *ConsumerRegistry) Release(subscription string) {
+	r.mu.Lock()
+	consumers := r.consumers[subscription]
+	delete(r.consumers, subscription)
+	delete(r.config, subscription)
+	r.mu.Unlock()
+	for _, c := range consumers {
+		c.Close()
+	}
 }
 
 // Get ignores ctx for the same reason as clientProducerRegistry.Get: the
 // v0.19.0 Subscribe API takes only options.
 func (r *ConsumerRegistry) Get(_ context.Context, subscription string) ([]consumer, error) {
+	r.mu.Lock()
 	opts, ok := r.config[subscription]
+	r.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("no consumer options configured for subscription %q", subscription)
 	}
@@ -89,7 +114,7 @@ func (r *ConsumerRegistry) Get(_ context.Context, subscription string) ([]consum
 	}
 
 	r.mu.Lock()
-	r.consumers = append(r.consumers, consumers...)
+	r.consumers[subscription] = append(r.consumers[subscription], consumers...)
 	r.mu.Unlock()
 
 	return consumers, nil
@@ -98,8 +123,10 @@ func (r *ConsumerRegistry) Get(_ context.Context, subscription string) ([]consum
 func (r *ConsumerRegistry) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, c := range r.consumers {
-		c.Close()
+	for _, consumers := range r.consumers {
+		for _, c := range consumers {
+			c.Close()
+		}
 	}
 	return nil
 }
