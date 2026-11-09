@@ -15,12 +15,31 @@ import (
 // the Publisher (inside a transaction); ListUnpublished/MarkPublished are
 // driven by a relay.
 type EventRepository struct {
-	db    *DB
-	table string
+	db         *DB
+	table      string
+	partitions int
 }
 
-func NewEventRepository(db *DB, table string) *EventRepository {
-	return &EventRepository{db: db, table: table}
+// EventRepositoryOption
+type EventRepositoryOption func(*EventRepository)
+
+// WithPartitions splits the outbox into n partitions by entity, so up to n relays
+// drain it in parallel. Changing n moves entities between partitions: change it
+// only with an empty outbox.
+func WithPartitions(n int) EventRepositoryOption {
+	return func(r *EventRepository) { r.partitions = max(n, 1) }
+}
+
+func NewEventRepository(db *DB, table string, opts ...EventRepositoryOption) *EventRepository {
+	r := &EventRepository{db: db, table: table, partitions: 1}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
+}
+
+func (r *EventRepository) Partitions() int {
+	return r.partitions
 }
 
 func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvelope) error {
@@ -29,7 +48,7 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 	}
 
 	insert := psql.Insert(r.table).
-		Columns("id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at", "published")
+		Columns("id", "entity_id", "type", "data", "metadata", "version", "idx", "partition", "created_at", "published")
 
 	for _, e := range envelopes {
 		metadata, err := json.Marshal(e.Metadata)
@@ -45,6 +64,7 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 			metadata,
 			int64(e.Version),
 			e.Index,
+			ember.Partition(e.EntityID, r.partitions),
 			e.Timestamp,
 			false,
 		)
@@ -58,7 +78,7 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 	return err
 }
 
-func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]ember.EventEnvelope, error) {
+func (r *EventRepository) ListUnpublished(ctx context.Context, partition, limit int) ([]ember.EventEnvelope, error) {
 	if limit <= 0 {
 		return nil, fmt.Errorf("%w: got %d", ember.ErrInvalidLimit, limit)
 	}
@@ -66,6 +86,7 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]emb
 	qb := psql.Select("id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at").
 		From(r.table).
 		Where("NOT published").
+		Where(sq.Eq{"partition": partition}).
 		OrderBy("entity_id", "version ASC", "idx ASC").
 		Limit(uint64(limit))
 

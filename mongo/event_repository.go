@@ -17,10 +17,29 @@ import (
 // driven by the relay (ember.Relay).
 type EventRepository struct {
 	collection *mongo.Collection
+	partitions int
 }
 
-func NewEventRepository(c *mongo.Collection) *EventRepository {
-	return &EventRepository{collection: c}
+// EventRepositoryOption
+type EventRepositoryOption func(*EventRepository)
+
+// WithPartitions splits the outbox into n partitions by entity, so up to n relays
+// drain it in parallel. Changing n moves entities between partitions: change it
+// only with an empty outbox.
+func WithPartitions(n int) EventRepositoryOption {
+	return func(r *EventRepository) { r.partitions = max(n, 1) }
+}
+
+func NewEventRepository(c *mongo.Collection, opts ...EventRepositoryOption) *EventRepository {
+	r := &EventRepository{collection: c, partitions: 1}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
+}
+
+func (r *EventRepository) Partitions() int {
+	return r.partitions
 }
 
 // Data is a nested document, not bytes, so the payload is readable and
@@ -33,6 +52,7 @@ type entry struct {
 	Metadata    ember.Metadata `bson:"metadata"`
 	Version     uint64         `bson:"version"`
 	Idx         int            `bson:"idx"`
+	Partition   int            `bson:"partition"`
 	CreatedAt   time.Time      `bson:"created_at"`
 	Published   bool           `bson:"published"`
 	PublishedAt *time.Time     `bson:"published_at,omitempty"`
@@ -59,6 +79,7 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 			Metadata:  e.Metadata,
 			Version:   e.Version,
 			Idx:       e.Index,
+			Partition: ember.Partition(e.EntityID, r.partitions),
 			CreatedAt: e.Timestamp,
 			Published: false,
 		})
@@ -67,7 +88,7 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 	return err
 }
 
-func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]ember.EventEnvelope, error) {
+func (r *EventRepository) ListUnpublished(ctx context.Context, partition, limit int) ([]ember.EventEnvelope, error) {
 	if limit <= 0 {
 		return nil, fmt.Errorf("%w: got %d", ember.ErrInvalidLimit, limit)
 	}
@@ -79,7 +100,15 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, limit int) ([]emb
 			{Key: "idx", Value: sortAscending},
 		}).
 		SetLimit(int64(limit))
-	filter := bson.D{{Key: "published", Value: false}}
+	// Rows written before partitioning have no partition field; they belong to 0.
+	inPartition := any(partition)
+	if partition == 0 {
+		inPartition = bson.D{{Key: "$in", Value: bson.A{0, nil}}}
+	}
+	filter := bson.D{
+		{Key: "published", Value: false},
+		{Key: "partition", Value: inPartition},
+	}
 
 	cur, err := r.collection.Find(ctx, filter, opts)
 	if err != nil {

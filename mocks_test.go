@@ -17,8 +17,12 @@ func (m *mockEventRepository) Save(ctx context.Context, envelopes []EventEnvelop
 	return m.Called(ctx, envelopes).Error(0)
 }
 
-func (m *mockEventRepository) ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error) {
-	args := m.Called(ctx, limit)
+func (m *mockEventRepository) Partitions() int {
+	return m.Called().Int(0)
+}
+
+func (m *mockEventRepository) ListUnpublished(ctx context.Context, partition, limit int) ([]EventEnvelope, error) {
+	args := m.Called(ctx, partition, limit)
 	var envs []EventEnvelope
 	if v := args.Get(0); v != nil {
 		envs = v.([]EventEnvelope)

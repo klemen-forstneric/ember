@@ -16,12 +16,21 @@ type PollingRelayConfig struct {
 	BatchSize    int           // events fetched per round
 	LockKey      string        // redis efficiency-lock key
 	Retention    time.Duration // published_at + Retention → expires_at (TTL)
+	// PublishConcurrency caps how many entities of a round publish at once. An
+	// entity's events always go out together, in order, in one Publish call.
+	PublishConcurrency int
+	// MaxHold bounds how long one partition's lock is held before it is released
+	// and taken again. Keep it well below the Locker's TTL, or the lock can expire
+	// while held and another relay republish the same rows.
+	MaxHold time.Duration
 }
 
 const (
 	defaultIdleInterval = 200 * time.Millisecond
 	defaultBatchSize    = 500
 	defaultRetention    = 7 * 24 * time.Hour
+	defaultConcurrency  = 32
+	defaultMaxHold      = 10 * time.Second
 )
 
 // DefaultPollingRelayConfig returns a PollingRelayConfig with sensible defaults.
@@ -32,6 +41,9 @@ func DefaultPollingRelayConfig(key string) PollingRelayConfig {
 		BatchSize:    defaultBatchSize,
 		LockKey:      key,
 		Retention:    defaultRetention,
+
+		PublishConcurrency: defaultConcurrency,
+		MaxHold:            defaultMaxHold,
 	}
 }
 
@@ -48,6 +60,10 @@ func validateRelayConfig(cfg PollingRelayConfig) error {
 		return fmt.Errorf("%w: BatchSize must be positive", ErrInvalidRelayConfig)
 	case cfg.Retention <= 0:
 		return fmt.Errorf("%w: Retention must be positive", ErrInvalidRelayConfig)
+	case cfg.PublishConcurrency <= 0:
+		return fmt.Errorf("%w: PublishConcurrency must be positive", ErrInvalidRelayConfig)
+	case cfg.MaxHold <= 0:
+		return fmt.Errorf("%w: MaxHold must be positive", ErrInvalidRelayConfig)
 	}
 	return nil
 }
@@ -55,10 +71,21 @@ func validateRelayConfig(cfg PollingRelayConfig) error {
 // ErrInvalidLimit is returned by ListUnpublished when limit is not positive.
 var ErrInvalidLimit = errors.New("ember: limit must be positive")
 
-// PollingRelayRepository is the drain side of a table-backed outbox.
+// PollingRelayRepository is the drain side of a table-backed outbox. Rows are
+// split into Partitions() partitions by entity (see Partition), so one entity's
+// events stay in one partition and in order, and partitions drain independently.
 type PollingRelayRepository interface {
-	ListUnpublished(ctx context.Context, limit int) ([]EventEnvelope, error)
+	Partitions() int
+	ListUnpublished(ctx context.Context, partition, limit int) ([]EventEnvelope, error)
 	MarkPublished(ctx context.Context, ids []string, expiresAt time.Time) error
+}
+
+// Partition is the outbox partition of an entity among n; n below 2 means one partition.
+func Partition(entityID string, n int) int {
+	if n < 2 {
+		return 0
+	}
+	return int(hashEntityID(entityID) % uint32(n))
 }
 
 // PollingRelay drains the outbox to the Sink. It is the sole publisher under the
@@ -91,8 +118,8 @@ func NewPollingRelay(r PollingRelayRepository, s Sink, l Locker, log LoggerCtx, 
 	}, nil
 }
 
-func (r *PollingRelay) publish(ctx context.Context) (int, error) {
-	events, err := r.repository.ListUnpublished(ctx, r.cfg.BatchSize)
+func (r *PollingRelay) publish(ctx context.Context, partition int) (int, error) {
+	events, err := r.repository.ListUnpublished(ctx, partition, r.cfg.BatchSize)
 	if err != nil {
 		return 0, err
 	}
@@ -102,24 +129,39 @@ func (r *PollingRelay) publish(ctx context.Context) (int, error) {
 		groups[e.EntityID] = append(groups[e.EntityID], e)
 	}
 
-	ids := make([]string, 0, len(events))
+	var (
+		mu    sync.Mutex
+		ids   = make([]string, 0, len(events))
+		wg    sync.WaitGroup
+		slots = make(chan struct{}, r.cfg.PublishConcurrency)
+	)
 	for id, es := range groups {
-		if err := r.sink.Publish(ctx, es); err != nil {
-			r.logger.Warn(ctx, "Failed to publish events, will retry",
-				"error", err, "entity_id", id, "num_events", len(es))
+		slots <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-slots }()
 
-			continue
-		}
+			if err := r.sink.Publish(ctx, es); err != nil {
+				r.logger.Warn(ctx, "Failed to publish events, will retry",
+					"error", err, "entity_id", id, "num_events", len(es))
+				return
+			}
 
-		for _, e := range es {
-			r.logger.Info(ctx, "Published event", "event_id", e.ID, "type", e.Event.Type,
-				"entity_id", e.EntityID, "payload", json.RawMessage(e.Event.Data),
-				"metadata", e.Metadata, "timestamp", e.Timestamp,
-				"lag", time.Since(e.Timestamp))
-
-			ids = append(ids, e.ID)
-		}
+			for _, e := range es {
+				r.logger.Info(ctx, "Published event", "event_id", e.ID, "type", e.Event.Type,
+					"entity_id", e.EntityID, "payload", json.RawMessage(e.Event.Data),
+					"metadata", e.Metadata, "timestamp", e.Timestamp,
+					"lag", time.Since(e.Timestamp))
+			}
+			mu.Lock()
+			for _, e := range es {
+				ids = append(ids, e.ID)
+			}
+			mu.Unlock()
+		}()
 	}
+	wg.Wait()
 
 	if len(ids) == 0 {
 		return 0, nil
@@ -133,38 +175,67 @@ func (r *PollingRelay) publish(ctx context.Context) (int, error) {
 	return len(ids), nil
 }
 
-func (r *PollingRelay) tick(ctx context.Context) {
-	lock, err := r.locker.TryLock(ctx, r.cfg.LockKey)
+// lockKey keeps the unpartitioned key for one partition, so existing deployments keep theirs.
+func (r *PollingRelay) lockKey(partition int) string {
+	if r.repository.Partitions() < 2 {
+		return r.cfg.LockKey
+	}
+	return fmt.Sprintf("%s:%d", r.cfg.LockKey, partition)
+}
+
+// tick drains one partition while holding its lock, for at most MaxHold. It
+// reports whether it stopped with rows possibly left, so the caller goes again
+// without waiting.
+func (r *PollingRelay) tick(ctx context.Context, partition int) bool {
+	key := r.lockKey(partition)
+	lock, err := r.locker.TryLock(ctx, key)
 	if err != nil {
-		r.logger.Error(ctx, "Failed to acquire outbox lock", err, "key", r.cfg.LockKey)
-		return
+		r.logger.Error(ctx, "Failed to acquire outbox lock", err, "key", key)
+		return false
 	}
 	if lock == nil {
-		return
+		return false
 	}
 
 	defer func() {
 		if err := lock.Release(context.WithoutCancel(ctx)); err != nil {
-			r.logger.Warn(ctx, "Failed to release outbox lock", "key", r.cfg.LockKey, "error", err)
+			r.logger.Warn(ctx, "Failed to release outbox lock", "key", key, "error", err)
 		}
 	}()
 
+	deadline := time.Now().Add(r.cfg.MaxHold)
 	for {
 		if ctx.Err() != nil {
-			return
+			return false
 		}
-		published, err := r.publish(ctx)
+		published, err := r.publish(ctx, partition)
 		if err != nil {
-			r.logger.Error(ctx, "Failed to drain outbox batch", err)
-			return
+			r.logger.Error(ctx, "Failed to drain outbox batch", err, "partition", partition)
+			return false
 		}
 		if published == 0 {
-			return
+			return false
+		}
+		if time.Now().After(deadline) {
+			return true
 		}
 	}
 }
 
+// Run drains every partition, each in its own loop, until ctx ends or Close.
 func (r *PollingRelay) Run(ctx context.Context) {
+	var wg sync.WaitGroup
+	for p := range r.repository.Partitions() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.runPartition(ctx, p)
+		}()
+	}
+	wg.Wait()
+}
+
+func (r *PollingRelay) runPartition(ctx context.Context, partition int) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -173,7 +244,9 @@ func (r *PollingRelay) Run(ctx context.Context) {
 			return
 		default:
 		}
-		r.tick(ctx)
+		if r.tick(ctx, partition) {
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			return

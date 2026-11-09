@@ -32,15 +32,11 @@ func (s *EnsureOutboxSuite) TestCreatesIndexes() {
 	var specs []bson.M
 	s.Require().NoError(cur.All(ctx, &specs))
 
-	var hasPartial, hasTTL bool
+	var partial []any
+	var hasTTL bool
 	for _, spec := range specs {
 		if _, ok := spec["partialFilterExpression"]; ok {
-			hasPartial = true
-			s.Equal(bson.D{
-				{Key: "entity_id", Value: int32(1)},
-				{Key: "version", Value: int32(1)},
-				{Key: "idx", Value: int32(1)},
-			}, spec["key"])
+			partial = append(partial, spec["key"])
 			s.Equal(bson.D{{Key: "published", Value: false}}, spec["partialFilterExpression"])
 		}
 		if _, ok := spec["expireAfterSeconds"]; ok {
@@ -49,7 +45,10 @@ func (s *EnsureOutboxSuite) TestCreatesIndexes() {
 			s.Equal(int32(0), spec["expireAfterSeconds"])
 		}
 	}
-	s.True(hasPartial, "expected a partial pending index")
+	s.ElementsMatch([]any{
+		bson.D{{Key: "entity_id", Value: int32(1)}, {Key: "version", Value: int32(1)}, {Key: "idx", Value: int32(1)}},
+		bson.D{{Key: "partition", Value: int32(1)}, {Key: "entity_id", Value: int32(1)}, {Key: "version", Value: int32(1)}, {Key: "idx", Value: int32(1)}},
+	}, partial, "the pending index, and one per relay partition")
 	s.True(hasTTL, "expected a TTL index")
 }
 

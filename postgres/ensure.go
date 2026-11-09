@@ -37,12 +37,16 @@ func EnsureOutbox(ctx context.Context, pool *sql.DB, outbox string) error {
 			metadata jsonb NOT NULL,
 			version bigint NOT NULL,
 			idx int NOT NULL,
+			partition int NOT NULL DEFAULT 0,
 			created_at timestamptz NOT NULL,
 			published boolean NOT NULL DEFAULT false,
 			published_at timestamptz,
 			expires_at timestamptz
 		)`, outbox),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s_unpublished ON %s (entity_id, version, idx) WHERE NOT published`, outbox, outbox),
+		// Outboxes created before partitioning: existing rows belong to partition 0.
+		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS partition int NOT NULL DEFAULT 0`, outbox),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s_unpublished_partition ON %s (partition, entity_id, version, idx) WHERE NOT published`, outbox, outbox),
 	}
 	for _, stmt := range stmts {
 		if _, err := pool.ExecContext(ctx, stmt); err != nil {

@@ -2,6 +2,7 @@ package mongo
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -53,7 +54,7 @@ func versioned(id, entityID string, version uint64, index int, ts time.Time) emb
 
 func (s *EventRepositorySuite) TestListUnpublishedRejectsNonPositiveLimit() {
 	for _, limit := range []int{0, -1} {
-		_, err := s.repo.ListUnpublished(context.Background(), limit)
+		_, err := s.repo.ListUnpublished(context.Background(), 0, limit)
 		s.Require().ErrorIs(err, ember.ErrInvalidLimit)
 	}
 }
@@ -67,7 +68,7 @@ func (s *EventRepositorySuite) TestListUnpublishedOrdersByVersionThenIndex() {
 		versioned("e2", "A", 1, 1, base),
 	}))
 
-	got, err := s.repo.ListUnpublished(ctx, 10)
+	got, err := s.repo.ListUnpublished(ctx, 0, 10)
 	s.Require().NoError(err)
 	s.Equal([]string{"e1", "e2", "e3"}, ids(got))
 	s.Equal(uint64(1), got[0].Version)
@@ -86,7 +87,7 @@ func (s *EventRepositorySuite) TestListUnpublishedIgnoresTheClock() {
 		versioned("e1", "A", 1, 0, base.Add(3*time.Second)),
 	}))
 
-	got, err := s.repo.ListUnpublished(ctx, 10)
+	got, err := s.repo.ListUnpublished(ctx, 0, 10)
 	s.Require().NoError(err)
 	s.Equal([]string{"e1", "e2", "e3"}, ids(got))
 }
@@ -102,7 +103,7 @@ func (s *EventRepositorySuite) TestListUnpublishedOrdersAcrossEntitiesByEntityID
 		versioned("a-1", "A", 1, 0, base),
 	}))
 
-	got, err := s.repo.ListUnpublished(ctx, 10)
+	got, err := s.repo.ListUnpublished(ctx, 0, 10)
 	s.Require().NoError(err)
 	s.Equal([]string{"a-1", "a-2", "b-1", "c-1", "c-2"}, ids(got),
 		"flat order must group runs by entity_id, each run a version-ordered prefix")
@@ -130,9 +131,60 @@ func (s *EventRepositorySuite) TestListUnpublishedRespectsLimit() {
 		versioned("e3", "A", 3, 0, base),
 	}))
 
-	got, err := s.repo.ListUnpublished(ctx, 2)
+	got, err := s.repo.ListUnpublished(ctx, 0, 2)
 	s.Require().NoError(err)
 	s.Equal([]string{"e1", "e2"}, ids(got))
+}
+
+func (s *EventRepositorySuite) TestPartitionsSplitPendingRowsByEntity() {
+	ctx := context.Background()
+	repo := NewEventRepository(s.repo.collection, WithPartitions(4))
+	base := time.Unix(1_700_000_000, 0).UTC()
+	var envs []ember.EventEnvelope
+	for i := range 20 {
+		envs = append(envs, versioned(fmt.Sprintf("e%d", i), fmt.Sprintf("entity-%d", i), 1, 0, base))
+	}
+	s.Require().NoError(repo.Save(ctx, envs))
+
+	seen := map[string]int{}
+	for p := range repo.Partitions() {
+		got, err := repo.ListUnpublished(ctx, p, 100)
+		s.Require().NoError(err)
+		for _, e := range got {
+			s.Equal(p, ember.Partition(e.EntityID, 4), "%s listed in the wrong partition", e.EntityID)
+			seen[e.ID]++
+		}
+	}
+	s.Len(seen, 20, "every row is in exactly one partition")
+	for id, n := range seen {
+		s.Equal(1, n, id)
+	}
+}
+
+func (s *EventRepositorySuite) TestRowsWithoutPartitionBelongToPartitionZero() {
+	ctx := context.Background()
+	repo := NewEventRepository(s.repo.collection, WithPartitions(4))
+	// A row written before partitioning: no partition field at all.
+	_, err := s.repo.collection.InsertOne(ctx, bson.D{
+		{Key: "_id", Value: "legacy"}, {Key: "entity_id", Value: "A"}, {Key: "type", Value: "Created"},
+		{Key: "data", Value: bson.D{}}, {Key: "version", Value: 1}, {Key: "idx", Value: 0},
+		{Key: "created_at", Value: time.Unix(1_700_000_000, 0).UTC()}, {Key: "published", Value: false},
+	})
+	s.Require().NoError(err)
+
+	got, err := repo.ListUnpublished(ctx, 0, 10)
+	s.Require().NoError(err)
+	s.Equal([]string{"legacy"}, ids(got))
+	for p := 1; p < 4; p++ {
+		got, err := repo.ListUnpublished(ctx, p, 10)
+		s.Require().NoError(err)
+		s.Empty(got)
+	}
+}
+
+func (s *EventRepositorySuite) TestOnePartitionByDefault() {
+	s.Equal(1, s.repo.Partitions())
+	s.Equal(1, NewEventRepository(s.repo.collection, WithPartitions(0)).Partitions())
 }
 
 func (s *EventRepositorySuite) TestMarkPublishedRemovesFromPending() {
@@ -146,7 +198,7 @@ func (s *EventRepositorySuite) TestMarkPublishedRemovesFromPending() {
 	expiresAt := time.Now().UTC().Add(24 * time.Hour)
 	s.Require().NoError(s.repo.MarkPublished(ctx, []string{"e1"}, expiresAt))
 
-	got, err := s.repo.ListUnpublished(ctx, 10)
+	got, err := s.repo.ListUnpublished(ctx, 0, 10)
 	s.Require().NoError(err)
 	s.Equal([]string{"e2"}, ids(got), "published event must drop out of pending")
 }

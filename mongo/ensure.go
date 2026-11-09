@@ -46,6 +46,17 @@ func EnsureOutbox(ctx context.Context, c *mongo.Collection) error {
 				SetPartialFilterExpression(bson.D{{Key: "published", Value: false}}),
 		},
 		{
+			// Each relay partition drains its own slice of the pending rows.
+			Keys: bson.D{
+				{Key: "partition", Value: sortAscending},
+				{Key: "entity_id", Value: sortAscending},
+				{Key: "version", Value: sortAscending},
+				{Key: "idx", Value: sortAscending},
+			},
+			Options: options.Index().
+				SetPartialFilterExpression(bson.D{{Key: "published", Value: false}}),
+		},
+		{
 			// TTL: mongo deletes a published doc once expires_at passes.
 			Keys:    bson.D{{Key: "expires_at", Value: sortAscending}},
 			Options: options.Index().SetExpireAfterSeconds(0),

@@ -50,11 +50,11 @@ func TestEnsureSchemaIsIdempotentAndBacksTheRepositories(t *testing.T) {
 		Metadata:  ember.Metadata{},
 		Timestamp: time.Now().UTC(),
 	}}))
-	unpublished, err := events.ListUnpublished(ctx, 10)
+	unpublished, err := events.ListUnpublished(ctx, 0, 10)
 	require.NoError(t, err)
 	require.Len(t, unpublished, 1)
 	require.NoError(t, events.MarkPublished(ctx, []string{"ev-1"}, time.Now().Add(time.Hour)))
-	unpublished, err = events.ListUnpublished(ctx, 10)
+	unpublished, err = events.ListUnpublished(ctx, 0, 10)
 	require.NoError(t, err)
 	require.Empty(t, unpublished)
 }
