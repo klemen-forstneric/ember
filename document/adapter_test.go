@@ -46,6 +46,28 @@ func (s *EntityLoaderSuite) TestGet() {
 	s.Equal(e, got)
 }
 
+func (s *EntityLoaderSuite) TestGetTakesStoredVersion() {
+	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(3)}
+	s.repo.On("Get", mock.Anything, "fake", "1").Return(m, nil)
+	s.marshaler.On("Unmarshal", mock.Anything, m).Return(newFakeEntity("1"), nil)
+
+	got, err := s.loader.Get(s.ctx, "1")
+
+	s.Require().NoError(err)
+	s.Equal(NewVersion(3), got.Version())
+}
+
+func (s *EntityLoaderSuite) TestGetRejectsChangedIdentity() {
+	m := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(3)}
+	s.repo.On("Get", mock.Anything, "fake", "1").Return(m, nil)
+	s.marshaler.On("Unmarshal", mock.Anything, m).Return(newFakeEntity("2"), nil)
+
+	got, err := s.loader.Get(s.ctx, "1")
+
+	s.Require().ErrorContains(err, `changed identity "1" to "2"`)
+	s.Nil(got)
+}
+
 func (s *EntityLoaderSuite) TestList() {
 	m1 := &MarshaledEntity{ID: "1", Type: "fake", Version: NewVersion(3), Data: []byte("alice")}
 	e1 := newFakeEntity("1")
@@ -58,6 +80,7 @@ func (s *EntityLoaderSuite) TestList() {
 
 	s.Require().NoError(err)
 	s.Equal([]*fakeEntity{e1}, got)
+	s.Equal(NewVersion(3), got[0].Version())
 }
 
 func (s *EntityLoaderSuite) TestListError() {

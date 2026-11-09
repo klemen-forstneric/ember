@@ -3,6 +3,8 @@ package document
 
 import (
 	"context"
+	"fmt"
+
 	"github.com/klemen-forstneric/ember"
 )
 
@@ -16,14 +18,30 @@ type Adapter[E ember.Entity] struct {
 func NewAdapter[E ember.Entity](r ember.DocumentRepository, m ember.EntityMarshaler[E]) *Adapter[E] {
 	return &Adapter[E]{repo: r, marshaler: m}
 }
+
 func (a *Adapter[E]) Get(ctx context.Context, id string) (E, error) {
 	var zero E
 	m, err := a.repo.Get(ctx, zero.Type(), id)
 	if err != nil {
 		return zero, err
 	}
-	return a.marshaler.Unmarshal(ctx, m)
+	return a.unmarshal(ctx, m)
 }
+
+func (a *Adapter[E]) unmarshal(ctx context.Context, m *ember.MarshaledEntity) (E, error) {
+	e, err := a.marshaler.Unmarshal(ctx, m)
+	if err != nil {
+		return e, err
+	}
+	if e.ID() != m.ID {
+		var zero E
+		return zero, fmt.Errorf("document: marshaler changed identity %q to %q", m.ID, e.ID())
+	}
+	// Stored metadata is authoritative, as on Save.
+	e.SetVersion(m.Version)
+	return e, nil
+}
+
 func (a *Adapter[E]) Save(ctx context.Context, e E, v ember.Version) error {
 	m, err := a.marshal(ctx, e, v)
 	if err != nil {
@@ -33,15 +51,18 @@ func (a *Adapter[E]) Save(ctx context.Context, e E, v ember.Version) error {
 	m.ID, m.Type, m.Version = e.ID(), e.Type(), v
 	return a.repo.Save(ctx, m)
 }
+
 func (a *Adapter[E]) marshal(ctx context.Context, e E, v ember.Version) (*ember.MarshaledEntity, error) {
 	previous := e.Version()
 	e.SetVersion(v)
 	defer e.SetVersion(previous)
 	return a.marshaler.Marshal(ctx, e)
 }
+
 func (a *Adapter[E]) List(ctx context.Context, f ember.Filter, s ember.Sort) ([]E, error) {
 	return a.ListPage(ctx, f, s, ember.Unpaged())
 }
+
 func (a *Adapter[E]) ListPage(ctx context.Context, f ember.Filter, s ember.Sort, p ember.Page) ([]E, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -53,7 +74,7 @@ func (a *Adapter[E]) ListPage(ctx context.Context, f ember.Filter, s ember.Sort,
 	}
 	out := make([]E, 0, len(ms))
 	for _, m := range ms {
-		e, err := a.marshaler.Unmarshal(ctx, m)
+		e, err := a.unmarshal(ctx, m)
 		if err != nil {
 			return nil, err
 		}
