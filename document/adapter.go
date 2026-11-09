@@ -8,14 +8,22 @@ import (
 	"github.com/klemen-forstneric/ember"
 )
 
+// Repository stores serialized snapshots. Wrap one with NewAdapter to bind it
+// to an EntitySaver or to query it through a typed API.
+type Repository interface {
+	Save(ctx context.Context, m *ember.MarshaledEntity) error
+	Get(ctx context.Context, typ, id string) (*ember.MarshaledEntity, error)
+	List(ctx context.Context, typ string, f ember.Filter, s ember.Sort, p ember.Page) ([]*ember.MarshaledEntity, error)
+}
+
 // Adapter owns document serialization and optional generic queries. Like the
 // entity itself, it must not be used to save the same entity concurrently.
 type Adapter[E ember.Entity] struct {
-	repo      ember.DocumentRepository
+	repo      Repository
 	marshaler ember.EntityMarshaler[E]
 }
 
-func NewAdapter[E ember.Entity](r ember.DocumentRepository, m ember.EntityMarshaler[E]) *Adapter[E] {
+func NewAdapter[E ember.Entity](r Repository, m ember.EntityMarshaler[E]) *Adapter[E] {
 	return &Adapter[E]{repo: r, marshaler: m}
 }
 

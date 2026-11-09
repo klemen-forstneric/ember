@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/klemen-forstneric/ember"
+	"github.com/klemen-forstneric/ember/document"
 )
 
 // clone returns a deep copy of a marshaled entity so stored state and returned
@@ -16,7 +17,7 @@ func clone(m *ember.MarshaledEntity) *ember.MarshaledEntity {
 	return &c
 }
 
-var _ ember.DocumentRepository = (*EntityRepository)(nil)
+var _ document.Repository = (*EntityRepository)(nil)
 
 type EntityRepository struct {
 	mu   sync.Mutex

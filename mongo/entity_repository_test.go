@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/suite"
 
 	"github.com/klemen-forstneric/ember"
+	emberdoc "github.com/klemen-forstneric/ember/document"
 )
 
 // marshaled builds a save at the version that replaces stored version v.
@@ -119,7 +120,7 @@ func (s *EntityRepositorySuite) TestListFiltersByEntityID() {
 }
 
 // Compile-time assertion that the repository satisfies the interface.
-var _ ember.DocumentRepository = (*EntityRepository)(nil)
+var _ emberdoc.Repository = (*EntityRepository)(nil)
 
 func TestListPagingLimitAndSkip(t *testing.T) {
 	col := connectTestMongo(t)

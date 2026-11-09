@@ -64,11 +64,3 @@ type EntityRepository[E Entity] interface {
 	Save(context.Context, E, Version) error
 	ListPage(context.Context, Filter, Sort, Page) ([]E, error)
 }
-
-// DocumentRepository stores serialized snapshots. Use document.NewAdapter to
-// bind one to an EntitySaver or to query it through a typed document API.
-type DocumentRepository interface {
-	Save(ctx context.Context, m *MarshaledEntity) error
-	Get(ctx context.Context, typ, id string) (*MarshaledEntity, error)
-	List(ctx context.Context, typ string, f Filter, s Sort, p Page) ([]*MarshaledEntity, error)
-}

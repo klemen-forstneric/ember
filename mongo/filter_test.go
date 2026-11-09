@@ -9,6 +9,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/klemen-forstneric/ember"
+	emberdoc "github.com/klemen-forstneric/ember/document"
 )
 
 func TestBuildFilter(t *testing.T) {
@@ -79,4 +80,4 @@ func TestBuildFilterUnsupportedValue(t *testing.T) {
 }
 
 // Compile-time assertion that the repository satisfies the interface.
-var _ ember.DocumentRepository = (*EntityRepository)(nil)
+var _ emberdoc.Repository = (*EntityRepository)(nil)

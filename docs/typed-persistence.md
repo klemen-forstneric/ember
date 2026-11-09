@@ -36,7 +36,7 @@ outer commit; discard/reload affected entities after an outer rollback.
 ## Migrating document callers
 
 The former non-generic `ember.EntityRepository` is now
-`ember.DocumentRepository`. Existing Mongo, JSONB, and `embertest` snapshot
+`document.Repository`. Existing Mongo, JSONB, and `embertest` snapshot
 repositories implement that interface. Wrap a repository and marshaler once:
 
 ```go

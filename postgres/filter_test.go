@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/klemen-forstneric/ember"
+	emberdoc "github.com/klemen-forstneric/ember/document"
 )
 
 func TestBuildPredicate(t *testing.T) {
@@ -97,4 +98,4 @@ func TestListQueryPlaceholders(t *testing.T) {
 }
 
 // Compile-time assertion that the repository satisfies the interface.
-var _ ember.DocumentRepository = (*EntityRepository)(nil)
+var _ emberdoc.Repository = (*EntityRepository)(nil)
