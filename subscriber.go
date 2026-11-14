@@ -124,7 +124,8 @@ func (s *Subscriber) Unsubscribe(name string) error {
 	return u.Unsubscribe(name)
 }
 
+// Stop waits for running handlers, then closes the source: handlers ack through its consumers.
 func (s *Subscriber) Stop() {
-	s.source.Stop()
 	s.consumer.Stop()
+	s.source.Stop()
 }

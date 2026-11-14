@@ -41,3 +41,26 @@ func TestUnsubscribeWithoutSourceSupportErrors(t *testing.T) {
 
 	assert.ErrorIs(t, s.Unsubscribe("ws.c1"), ErrUnsubscribeUnsupported)
 }
+
+// mockConsumer records Stop.
+type mockConsumer struct{ mock.Mock }
+
+func (m *mockConsumer) Run(ctx context.Context, name string, ch <-chan AckableEventEnvelope, consume ConsumeFunc) {
+	m.Called(ctx, name, ch, consume)
+}
+
+func (m *mockConsumer) Stop() { m.Called() }
+
+// Handlers ack through the source's consumers, so the source closes only after they finish.
+func TestStopDrainsTheConsumerBeforeStoppingTheSource(t *testing.T) {
+	var order []string
+	src := &mockSource{}
+	src.On("Stop").Run(func(mock.Arguments) { order = append(order, "source") })
+	consumer := &mockConsumer{}
+	consumer.On("Stop").Run(func(mock.Arguments) { order = append(order, "consumer") })
+	s := NewSubscriber(nil, src, consumer, NopLogger)
+
+	s.Stop()
+
+	assert.Equal(t, []string{"consumer", "source"}, order)
+}
