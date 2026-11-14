@@ -59,18 +59,20 @@ func connectTestPulsar(t *testing.T) pulsar.Client {
 
 func seqEnvelope(entityID string, n int) ember.EventEnvelope {
 	return ember.EventEnvelope{
-		ID:        fmt.Sprintf("%s-%d", entityID, n),
-		EntityID:  entityID,
-		Event:     &ember.MarshaledEvent{Type: "Bumped", Data: []byte(fmt.Sprintf(`{"n":%d}`, n))},
-		Metadata:  ember.Metadata{MetadataKeyCorrelationID: "corr-" + entityID},
-		Timestamp: time.Now().UTC(),
+		ID:          fmt.Sprintf("%s-%d", entityID, n),
+		EntityID:    entityID,
+		OrderingKey: entityID,
+		Event:       &ember.MarshaledEvent{Type: "Bumped", Data: []byte(fmt.Sprintf(`{"n":%d}`, n))},
+		Metadata:    ember.Metadata{MetadataKeyCorrelationID: "corr-" + entityID},
+		Timestamp:   time.Now().UTC(),
 	}
 }
 
 type received struct {
-	consumer int
-	entityID string
-	n        int
+	consumer    int
+	entityID    string
+	orderingKey string
+	n           int
 }
 
 // keySharedReader
@@ -99,7 +101,12 @@ func newKeySharedReader(t *testing.T, consumers []pulsar.Consumer) *keySharedRea
 					continue
 				}
 				_ = c.Ack(cm.Message)
-				r.out <- received{consumer: i, entityID: m.EntityID, n: payload.N}
+				r.out <- received{
+					consumer:    i,
+					entityID:    m.EntityID,
+					orderingKey: cm.Key(),
+					n:           payload.N,
+				}
 			}
 		}(i, c)
 	}
@@ -191,6 +198,79 @@ func TestKeySharedDeliveryKeepsEachEntityOnOneConsumer(t *testing.T) {
 			want[i] = i
 		}
 		require.Equal(t, want, order[entityID], "entity %s arrived out of order", entityID)
+	}
+}
+
+func TestKeySharedDeliveryFollowsTheOrderingKey(t *testing.T) {
+	const (
+		orderingKeys = 16
+		eventsPerKey = 5
+		consumers    = 2
+	)
+
+	client := connectTestPulsar(t)
+	ctx := context.Background()
+
+	unique := time.Now().UnixNano()
+	topic := fmt.Sprintf("persistent://public/default/ember-ordering-key-%d", unique)
+	subscription := fmt.Sprintf("ember-ordering-key-sub-%d", unique)
+
+	cs := make([]pulsar.Consumer, consumers)
+	for i := range cs {
+		c, err := client.Subscribe(pulsar.ConsumerOptions{
+			Topic:            topic,
+			SubscriptionName: subscription,
+			Type:             pulsar.KeyShared,
+		})
+		require.NoError(t, err)
+		t.Cleanup(c.Close)
+		cs[i] = c
+	}
+
+	time.Sleep(2 * time.Second)
+
+	registry := NewProducerRegistry(client, map[string]string{"Bumped": topic})
+	t.Cleanup(func() { _ = registry.Close() })
+	publisher := NewPublisher(registry, 0)
+
+	reader := newKeySharedReader(t, cs)
+
+	// Every event is its own entity, so only the ordering key can keep a key's events together.
+	for n := range eventsPerKey {
+		for k := range orderingKeys {
+			orderingKey := fmt.Sprintf("chat-%02d", k)
+			e := seqEnvelope(fmt.Sprintf("%s-message-%d", orderingKey, n), n)
+			e.OrderingKey = orderingKey
+			require.NoError(t, publisher.Publish(ctx, []ember.EventEnvelope{e}))
+		}
+	}
+
+	got := reader.collect(t, orderingKeys*eventsPerKey, 30*time.Second)
+
+	owners := map[string]map[int]bool{}
+	order := map[string][]int{}
+	active := map[int]bool{}
+	for _, m := range got {
+		if owners[m.orderingKey] == nil {
+			owners[m.orderingKey] = map[int]bool{}
+		}
+		owners[m.orderingKey][m.consumer] = true
+		order[m.orderingKey] = append(order[m.orderingKey], m.n)
+		active[m.consumer] = true
+	}
+
+	require.Len(t, owners, orderingKeys)
+	require.Greater(t, len(active), 1,
+		"every key landed on one consumer; the hash ranges never split, so this run proves nothing")
+
+	for orderingKey, seen := range owners {
+		require.Len(t, seen, 1, "ordering key %s was split across consumers %v", orderingKey, seen)
+
+		want := make([]int, eventsPerKey)
+		for i := range want {
+			want[i] = i
+		}
+		require.Equal(t, want, order[orderingKey], "ordering key %s arrived out of order", orderingKey)
 	}
 }
 

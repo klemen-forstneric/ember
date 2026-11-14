@@ -38,7 +38,7 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 	require.True(t, in.Timestamp.Equal(out.Timestamp))
 }
 
-func TestEncodeDecodeRoundTripsTheOrderingKey(t *testing.T) {
+func TestEncodeDecodeRoundTripsVersionAndIndex(t *testing.T) {
 	e := ember.EventEnvelope{
 		ID:        "e1",
 		EntityID:  "A",
@@ -60,22 +60,46 @@ func TestEncodeDecodeRoundTripsTheOrderingKey(t *testing.T) {
 	require.Equal(t, e.Event.Type, got.Event.Type)
 }
 
+func TestEncodeDecodeRoundTripsTheOrderingKey(t *testing.T) {
+	b, err := encode(ember.EventEnvelope{
+		ID:          "e1",
+		EntityID:    "message-1",
+		OrderingKey: "chat-1",
+		Event:       &ember.MarshaledEvent{Type: "Created", Data: []byte(`{"k":"v"}`)},
+	})
+	require.NoError(t, err)
+
+	got, err := decode(b)
+
+	require.NoError(t, err)
+	require.Equal(t, "chat-1", got.OrderingKey)
+	require.Equal(t, "message-1", got.EntityID)
+}
+
+func TestDecodeWithoutOrderingKeyUsesTheEntityID(t *testing.T) {
+	got, err := decode([]byte(`{"id":"e1","entity_id":"A","type":"Created","data":{}}`))
+
+	require.NoError(t, err)
+	require.Equal(t, "A", got.OrderingKey)
+}
+
 func TestEncodeUsesTheOutboxWireKeys(t *testing.T) {
 	b, err := encode(ember.EventEnvelope{
-		ID:        "e1",
-		EntityID:  "A",
-		Event:     &ember.MarshaledEvent{Type: "Created", Data: []byte(`{"k":"v"}`)},
-		Metadata:  ember.Metadata{ember.MetadataKey("correlation_id"): "c-1"},
-		Version:   7,
-		Index:     2,
-		Timestamp: time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC),
+		ID:          "e1",
+		EntityID:    "A",
+		OrderingKey: "A",
+		Event:       &ember.MarshaledEvent{Type: "Created", Data: []byte(`{"k":"v"}`)},
+		Metadata:    ember.Metadata{ember.MetadataKey("correlation_id"): "c-1"},
+		Version:     7,
+		Index:       2,
+		Timestamp:   time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC),
 	})
 	require.NoError(t, err)
 
 	var raw map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(b, &raw))
 	require.ElementsMatch(t,
-		[]string{"id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at"},
+		[]string{"id", "entity_id", "ordering_key", "type", "data", "metadata", "version", "idx", "created_at"},
 		slices.Collect(maps.Keys(raw)))
 }
 

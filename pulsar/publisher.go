@@ -17,7 +17,7 @@ const defaultMaxMessageSize = 5 * 1024 * 1024
 // producerRegistry resolves the producer for an event type, creating and
 // caching it on demand. Get returns an error for an unmapped event type.
 type producerRegistry interface {
-	Get(ctx context.Context, eventType, entityID string) (producer, error)
+	Get(ctx context.Context, eventType string) (producer, error)
 	Close() error
 }
 
@@ -55,7 +55,7 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 			return fmt.Errorf("invalid metadata, missing key '%v'", MetadataKeyCorrelationID)
 		}
 
-		prod, err := p.registry.Get(ctx, e.Event.Type, e.EntityID)
+		prod, err := p.registry.Get(ctx, e.Event.Type)
 		if err != nil {
 			return err
 		}
@@ -80,7 +80,7 @@ func (p *Publisher) Publish(ctx context.Context, envelopes []ember.EventEnvelope
 		prepared = append(prepared, pending{
 			prod: prod,
 			msg: &pulsar.ProducerMessage{
-				Key:       e.EntityID,
+				Key:       e.OrderingKey,
 				Payload:   payload,
 				EventTime: e.Timestamp,
 			},

@@ -160,6 +160,40 @@ func (s *PublisherSuite) TestPublishStampsUnorderedLane() {
 	s.Equal([]int{0, 1}, []int{got[0].Index, got[1].Index})
 }
 
+func (s *PublisherSuite) TestOrderingKeyComesFromTheEvent() {
+	evt := orderedEvent{
+		entityID:    "message-1",
+		orderingKey: "chat-1",
+	}
+	s.marshaler.On("Marshal", mock.Anything, evt).
+		Return(&MarshaledEvent{Type: "Ordered", Data: []byte(`{}`)}, nil)
+
+	var got []EventEnvelope
+	s.repo.On("Save", mock.Anything, mock.Anything).Return(nil).Once().
+		Run(func(args mock.Arguments) { got = args.Get(1).([]EventEnvelope) })
+
+	s.Require().NoError(s.atLeastOncePublisher().Publish(s.ctx, evt))
+
+	s.Require().Len(got, 1)
+	s.Equal("message-1", got[0].EntityID)
+	s.Equal("chat-1", got[0].OrderingKey)
+}
+
+func (s *PublisherSuite) TestOrderingKeyDefaultsToTheEntityID() {
+	evt := fakeEvent{entityID: "A", typ: "Created"}
+	s.marshaler.On("Marshal", mock.Anything, evt).
+		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
+
+	var got []EventEnvelope
+	s.repo.On("Save", mock.Anything, mock.Anything).Return(nil).Once().
+		Run(func(args mock.Arguments) { got = args.Get(1).([]EventEnvelope) })
+
+	s.Require().NoError(s.atLeastOncePublisher().Publish(s.ctx, evt))
+
+	s.Require().Len(got, 1)
+	s.Equal("A", got[0].OrderingKey)
+}
+
 func (s *PublisherSuite) TestPublishNoEventsIsNoop() {
 	s.Require().NoError(s.atLeastOncePublisher().Publish(s.ctx))
 	s.Require().NoError(s.bestEffortPublisher().Publish(s.ctx))

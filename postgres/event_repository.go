@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -48,7 +49,7 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 	}
 
 	insert := psql.Insert(r.table).
-		Columns("id", "entity_id", "type", "data", "metadata", "version", "idx", "partition", "created_at", "published")
+		Columns("id", "entity_id", "ordering_key", "type", "data", "metadata", "version", "idx", "partition", "created_at", "published")
 
 	for _, e := range envelopes {
 		metadata, err := json.Marshal(e.Metadata)
@@ -59,6 +60,7 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 		insert = insert.Values(
 			e.ID,
 			e.EntityID,
+			e.OrderingKey,
 			e.Event.Type,
 			e.Event.Data,
 			metadata,
@@ -83,7 +85,7 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, partition, limit 
 		return nil, fmt.Errorf("%w: got %d", ember.ErrInvalidLimit, limit)
 	}
 
-	qb := psql.Select("id", "entity_id", "type", "data", "metadata", "version", "idx", "created_at").
+	qb := psql.Select("id", "entity_id", "ordering_key", "type", "data", "metadata", "version", "idx", "created_at").
 		From(r.table).
 		Where("NOT published").
 		Where(sq.Eq{"partition": partition}).
@@ -103,13 +105,13 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, partition, limit 
 	var es []ember.EventEnvelope
 	for rows.Next() {
 		var (
-			id, entityID, typ string
-			data, metadata    []byte
-			version           int64
-			idx               int
-			createdAt         time.Time
+			id, entityID, orderingKey, typ string
+			data, metadata                 []byte
+			version                        int64
+			idx                            int
+			createdAt                      time.Time
 		)
-		if err := rows.Scan(&id, &entityID, &typ, &data, &metadata, &version, &idx, &createdAt); err != nil {
+		if err := rows.Scan(&id, &entityID, &orderingKey, &typ, &data, &metadata, &version, &idx, &createdAt); err != nil {
 			return nil, err
 		}
 		md := ember.Metadata{}
@@ -120,10 +122,11 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, partition, limit 
 		}
 
 		es = append(es, ember.EventEnvelope{
-			ID:       id,
-			EntityID: entityID,
-			Version:  uint64(version),
-			Index:    idx,
+			ID:          id,
+			EntityID:    entityID,
+			OrderingKey: cmp.Or(orderingKey, entityID),
+			Version:     uint64(version),
+			Index:       idx,
 			Event: &ember.MarshaledEvent{
 				Type: typ,
 				Data: data,

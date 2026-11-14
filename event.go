@@ -25,13 +25,14 @@ type EventRepository interface {
 
 // EventEnvelope
 type EventEnvelope struct {
-	ID        string
-	EntityID  string
-	Version   uint64
-	Index     int
-	Event     *MarshaledEvent
-	Metadata  Metadata
-	Timestamp time.Time
+	ID          string
+	EntityID    string
+	OrderingKey string
+	Version     uint64
+	Index       int
+	Event       *MarshaledEvent
+	Metadata    Metadata
+	Timestamp   time.Time
 }
 
 // AckableEventEnvelope
@@ -46,6 +47,11 @@ type AckableEventEnvelope struct {
 type Event interface {
 	EntityID() string
 	Type() string
+}
+
+// OrderingKeyer is optional on an Event: the key it is ordered by, when that is not its entity id.
+type OrderingKeyer interface {
+	OrderingKey() string
 }
 
 // ReceivedEvent
@@ -70,6 +76,13 @@ type staged struct {
 	index   int
 }
 
+func (s staged) OrderingKey() string {
+	if e, ok := s.event.(OrderingKeyer); ok {
+		return e.OrderingKey()
+	}
+	return s.event.EntityID()
+}
+
 func (b envelopeBuilder) build(ctx context.Context, events []staged) ([]EventEnvelope, error) {
 	metadata, err := b.metadata.Get(ctx)
 	if err != nil {
@@ -83,13 +96,14 @@ func (b envelopeBuilder) build(ctx context.Context, events []staged) ([]EventEnv
 			return nil, err
 		}
 		envelopes = append(envelopes, EventEnvelope{
-			ID:        b.ider.ID(),
-			EntityID:  e.event.EntityID(),
-			Version:   e.version,
-			Index:     e.index,
-			Event:     marshaled,
-			Metadata:  metadata,
-			Timestamp: time.Now().UTC(),
+			ID:          b.ider.ID(),
+			EntityID:    e.event.EntityID(),
+			OrderingKey: e.OrderingKey(),
+			Version:     e.version,
+			Index:       e.index,
+			Event:       marshaled,
+			Metadata:    metadata,
+			Timestamp:   time.Now().UTC(),
 		})
 	}
 	return envelopes, nil

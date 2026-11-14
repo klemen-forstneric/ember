@@ -117,3 +117,35 @@ func TestEnsureOutboxMigratesATableFromBeforePartitions(t *testing.T) {
 	require.Equal(t, []string{"legacy"}, ids(got), "rows from before partitioning belong to partition 0")
 	require.NoError(t, repo.Save(ctx, []ember.EventEnvelope{versioned("new", "B", 1, 0, time.Unix(1_700_000_000, 0).UTC())}))
 }
+
+func TestEnsureOutboxMigratesATableFromBeforeOrderingKeys(t *testing.T) {
+	pool := connectTestPostgres(t)
+	table := "ember_ordering_key_migration_test"
+	_, err := pool.Exec(fmt.Sprintf(`DROP TABLE IF EXISTS %s`, table))
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(fmt.Sprintf(`DROP TABLE IF EXISTS %s`, table)) })
+	// The outbox as created before ordering keys, holding one pending row.
+	_, err = pool.Exec(fmt.Sprintf(`CREATE TABLE %s (
+		id text PRIMARY KEY, entity_id text NOT NULL, type text NOT NULL, data jsonb NOT NULL,
+		metadata jsonb NOT NULL, version bigint NOT NULL, idx int NOT NULL, partition int NOT NULL DEFAULT 0,
+		created_at timestamptz NOT NULL, published boolean NOT NULL DEFAULT false, published_at timestamptz,
+		expires_at timestamptz
+	)`, table))
+	require.NoError(t, err)
+	_, err = pool.Exec(fmt.Sprintf(`INSERT INTO %s (id, entity_id, type, data, metadata, version, idx, created_at)
+		VALUES ('legacy', 'A', 'Created', '{}', '{}', 1, 0, now())`, table))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	require.NoError(t, EnsureOutbox(ctx, pool, table))
+	repo := NewEventRepository(NewDB(pool), table)
+	ordered := versioned("new", "message-1", 1, 0, time.Unix(1_700_000_000, 0).UTC())
+	ordered.OrderingKey = "chat-1"
+	require.NoError(t, repo.Save(ctx, []ember.EventEnvelope{ordered}))
+
+	got, err := repo.ListUnpublished(ctx, 0, 10)
+	require.NoError(t, err)
+	require.Equal(t, []string{"legacy", "new"}, ids(got))
+	require.Equal(t, "A", got[0].OrderingKey, "rows from before ordering keys are ordered by entity")
+	require.Equal(t, "chat-1", got[1].OrderingKey)
+}

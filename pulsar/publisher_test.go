@@ -14,22 +14,24 @@ import (
 
 func envelope(eventType, entityID string) []ember.EventEnvelope {
 	return []ember.EventEnvelope{{
-		ID:        "evt-1",
-		EntityID:  entityID,
-		Event:     &ember.MarshaledEvent{Type: eventType, Data: []byte(`{"k":"v"}`)},
-		Metadata:  ember.Metadata{MetadataKeyCorrelationID: "corr-1"},
-		Timestamp: time.Unix(0, 0).UTC(),
+		ID:          "evt-1",
+		EntityID:    entityID,
+		OrderingKey: entityID,
+		Event:       &ember.MarshaledEvent{Type: eventType, Data: []byte(`{"k":"v"}`)},
+		Metadata:    ember.Metadata{MetadataKeyCorrelationID: "corr-1"},
+		Timestamp:   time.Unix(0, 0).UTC(),
 	}}
 }
 
 func twoEnvelopes(eventType string) []ember.EventEnvelope {
 	e := envelope(eventType, "e1")
 	e = append(e, ember.EventEnvelope{
-		ID:        "evt-2",
-		EntityID:  "e2",
-		Event:     &ember.MarshaledEvent{Type: eventType, Data: []byte(`{"k":"v"}`)},
-		Metadata:  ember.Metadata{MetadataKeyCorrelationID: "corr-2"},
-		Timestamp: time.Unix(0, 0).UTC(),
+		ID:          "evt-2",
+		EntityID:    "e2",
+		OrderingKey: "e2",
+		Event:       &ember.MarshaledEvent{Type: eventType, Data: []byte(`{"k":"v"}`)},
+		Metadata:    ember.Metadata{MetadataKeyCorrelationID: "corr-2"},
+		Timestamp:   time.Unix(0, 0).UTC(),
 	})
 	return e
 }
@@ -50,7 +52,7 @@ func (s *PublisherSuite) SetupTest() {
 func (s *PublisherSuite) TestRoutesByEventType() {
 	prod := &mockProducer{}
 	prod.On("SendAsync", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	s.reg.On("Get", mock.Anything, "order.created", "e1").Return(prod, nil)
+	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
 	p := NewPublisher(s.reg, 0)
 
 	err := p.Publish(context.Background(), envelope("order.created", "e1"))
@@ -61,8 +63,24 @@ func (s *PublisherSuite) TestRoutesByEventType() {
 	s.Equal("e1", sent[0].Key)
 }
 
+// Key_Shared and the partition router both hash the message key.
+func (s *PublisherSuite) TestKeysTheMessageByTheOrderingKey() {
+	prod := &mockProducer{}
+	prod.On("SendAsync", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	s.reg.On("Get", mock.Anything, "message.started").Return(prod, nil)
+	e := envelope("message.started", "message-1")
+	e[0].OrderingKey = "chat-1"
+
+	err := NewPublisher(s.reg, 0).Publish(context.Background(), e)
+	s.Require().NoError(err)
+
+	sent := prod.sent()
+	s.Require().Len(sent, 1)
+	s.Equal("chat-1", sent[0].Key)
+}
+
 func (s *PublisherSuite) TestUnmappedTypeErrors() {
-	s.reg.On("Get", mock.Anything, "payment.refunded", mock.Anything).Return(nil, errors.New("unmapped event type"))
+	s.reg.On("Get", mock.Anything, "payment.refunded").Return(nil, errors.New("unmapped event type"))
 	p := NewPublisher(s.reg, 0)
 
 	err := p.Publish(context.Background(), envelope("payment.refunded", "e1"))
@@ -84,7 +102,7 @@ func (s *PublisherSuite) TestMissingCorrelationIDErrors() {
 func (s *PublisherSuite) TestAggregatesSendErrors() {
 	prod := &mockProducer{}
 	prod.On("SendAsync", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("boom"))
-	s.reg.On("Get", mock.Anything, "order.created", mock.Anything).Return(prod, nil)
+	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
 	p := NewPublisher(s.reg, 0)
 
 	err := p.Publish(context.Background(), envelope("order.created", "e1"))
@@ -99,7 +117,7 @@ func (s *PublisherSuite) TestFailingSendReturnsError() {
 	prod.On("SendAsync", mock.Anything, mock.MatchedBy(func(m *pulsar.ProducerMessage) bool {
 		return m.Key == "e2"
 	}), mock.Anything).Return(nil)
-	s.reg.On("Get", mock.Anything, "order.created", mock.Anything).Return(prod, nil)
+	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
 	p := NewPublisher(s.reg, 0)
 
 	err := p.Publish(context.Background(), twoEnvelopes("order.created"))
@@ -109,7 +127,7 @@ func (s *PublisherSuite) TestFailingSendReturnsError() {
 func (s *PublisherSuite) TestFullySuccessfulBatchReturnsNil() {
 	prod := &mockProducer{}
 	prod.On("SendAsync", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	s.reg.On("Get", mock.Anything, "order.created", mock.Anything).Return(prod, nil)
+	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
 	p := NewPublisher(s.reg, 0)
 
 	err := p.Publish(context.Background(), twoEnvelopes("order.created"))
@@ -118,7 +136,7 @@ func (s *PublisherSuite) TestFullySuccessfulBatchReturnsNil() {
 
 func (s *PublisherSuite) TestOversizedEnvelopeRejectedBeforeAnySend() {
 	prod := &mockProducer{}
-	s.reg.On("Get", mock.Anything, "order.created", mock.Anything).Return(prod, nil)
+	s.reg.On("Get", mock.Anything, "order.created").Return(prod, nil)
 	p := NewPublisher(s.reg, 10) // 10-byte max, well under the marshaled envelope size
 
 	err := p.Publish(context.Background(), envelope("order.created", "e1"))

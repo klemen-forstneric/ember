@@ -1,6 +1,7 @@
 package mongo
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"time"
@@ -47,6 +48,7 @@ func (r *EventRepository) Partitions() int {
 type entry struct {
 	ID          string         `bson:"_id"`
 	EntityID    string         `bson:"entity_id"`
+	OrderingKey string         `bson:"ordering_key"`
 	Type        string         `bson:"type"`
 	Data        bson.Raw       `bson:"data"`
 	Metadata    ember.Metadata `bson:"metadata"`
@@ -72,16 +74,17 @@ func (r *EventRepository) Save(ctx context.Context, envelopes []ember.EventEnvel
 		}
 
 		ds = append(ds, entry{
-			ID:        e.ID,
-			EntityID:  e.EntityID,
-			Type:      e.Event.Type,
-			Data:      data,
-			Metadata:  e.Metadata,
-			Version:   e.Version,
-			Idx:       e.Index,
-			Partition: ember.Partition(e.EntityID, r.partitions),
-			CreatedAt: e.Timestamp,
-			Published: false,
+			ID:          e.ID,
+			EntityID:    e.EntityID,
+			OrderingKey: e.OrderingKey,
+			Type:        e.Event.Type,
+			Data:        data,
+			Metadata:    e.Metadata,
+			Version:     e.Version,
+			Idx:         e.Index,
+			Partition:   ember.Partition(e.EntityID, r.partitions),
+			CreatedAt:   e.Timestamp,
+			Published:   false,
 		})
 	}
 	_, err := r.collection.InsertMany(ctx, ds)
@@ -129,10 +132,11 @@ func (r *EventRepository) ListUnpublished(ctx context.Context, partition, limit 
 		}
 
 		out = append(out, ember.EventEnvelope{
-			ID:       d.ID,
-			EntityID: d.EntityID,
-			Version:  d.Version,
-			Index:    d.Idx,
+			ID:          d.ID,
+			EntityID:    d.EntityID,
+			OrderingKey: cmp.Or(d.OrderingKey, d.EntityID),
+			Version:     d.Version,
+			Index:       d.Idx,
 			Event: &ember.MarshaledEvent{
 				Type: d.Type,
 				Data: data,

@@ -19,10 +19,12 @@ type stubMessage struct {
 	pulsar.Message
 	payload     []byte
 	redelivered uint32
+	key         string
 }
 
 func (m stubMessage) Payload() []byte         { return m.payload }
 func (m stubMessage) RedeliveryCount() uint32 { return m.redelivered }
+func (m stubMessage) Key() string             { return m.key }
 
 func msgFor(t *testing.T, eventType, entityID, correlationID string, redelivered uint32) pulsar.ConsumerMessage {
 	t.Helper()
@@ -96,6 +98,27 @@ func (s *SubscriberSuite) TestForwardsAndStampsMetadata() {
 
 	s.sub.Stop()
 	s.Equal(1, c.callCount("Ack"))
+}
+
+func (s *SubscriberSuite) TestOrderingKeyIsTheMessageKey() {
+	c := s.newConsumer(5, true)
+	out := s.start(c)
+	msg := msgFor(s.T(), "message.started", "message-1", "corr-1", 0)
+	msg.Message = stubMessage{
+		payload: msg.Payload(),
+		key:     "chat-1",
+	}
+
+	c.in <- msg
+
+	select {
+	case env := <-out:
+		s.Equal("chat-1", env.OrderingKey)
+		s.Equal("message-1", env.EntityID)
+	case <-time.After(time.Second):
+		s.FailNow("timed out waiting for an envelope")
+	}
+	s.sub.Stop()
 }
 
 func (s *SubscriberSuite) TestOmitsMaxDeliveriesWhenUncapped() {

@@ -32,6 +32,7 @@ func EnsureOutbox(ctx context.Context, pool *sql.DB, outbox string) error {
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 			id text PRIMARY KEY,
 			entity_id text NOT NULL,
+			ordering_key text NOT NULL DEFAULT '',
 			type text NOT NULL,
 			data jsonb NOT NULL,
 			metadata jsonb NOT NULL,
@@ -47,6 +48,8 @@ func EnsureOutbox(ctx context.Context, pool *sql.DB, outbox string) error {
 		// Outboxes created before partitioning: existing rows belong to partition 0.
 		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS partition int NOT NULL DEFAULT 0`, outbox),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s_unpublished_partition ON %s (partition, entity_id, version, idx) WHERE NOT published`, outbox, outbox),
+		// Outboxes created before ordering keys: existing rows are ordered by entity.
+		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS ordering_key text NOT NULL DEFAULT ''`, outbox),
 	}
 	for _, stmt := range stmts {
 		if _, err := pool.ExecContext(ctx, stmt); err != nil {

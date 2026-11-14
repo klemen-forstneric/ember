@@ -89,11 +89,20 @@ func (s *ConflatingConsumerSuite) start(limit int) {
 	s.consumer.Run(context.Background(), "sub", s.ch, s.handler.consume)
 }
 
-// send delivers an event whose Ack the suite records. The consumer itself acks only
-// superseded events; handled ones are acked by the subscriber's consume, not here.
+// send delivers an event of an entity that is its own ordering key.
 func (s *ConflatingConsumerSuite) send(id, entityID string) {
+	s.sendOrdered(id, entityID, entityID)
+}
+
+// sendOrdered delivers an event whose Ack the suite records. The consumer itself acks only
+// superseded events; handled ones are acked by the subscriber's consume, not here.
+func (s *ConflatingConsumerSuite) sendOrdered(id, entityID, orderingKey string) {
 	s.ch <- AckableEventEnvelope{
-		EventEnvelope: EventEnvelope{ID: id, EntityID: entityID},
+		EventEnvelope: EventEnvelope{
+			ID:          id,
+			EntityID:    entityID,
+			OrderingKey: orderingKey,
+		},
 		Ack: func() {
 			s.mu.Lock()
 			defer s.mu.Unlock()
@@ -127,6 +136,21 @@ func (s *ConflatingConsumerSuite) TestHandlesOnlyTheNewestEventThatArrivedWhileB
 	s.awaitStarted("a3")
 	s.Equal([]string{"a1", "a3"}, s.handler.startedIDs())
 	s.Equal([]string{"a2"}, s.ackedIDs(), "the newest event is left for the subscriber to ack")
+}
+
+func (s *ConflatingConsumerSuite) TestConflatesTheEntitiesOfOneOrderingKey() {
+	s.handler.hold("m1")
+	s.sendOrdered("m1", "message-1", "chat")
+	s.awaitStarted("m1")
+
+	s.sendOrdered("m2", "message-2", "chat")
+	s.sendOrdered("m3", "message-3", "chat")
+	s.Eventually(func() bool { return slices.Equal(s.ackedIDs(), []string{"m2"}) }, time.Second, time.Millisecond)
+	s.Never(func() bool { return s.handler.hasStarted("m3") }, 50*time.Millisecond, time.Millisecond, "one event per ordering key at a time")
+
+	s.handler.release("m1")
+	s.awaitStarted("m3")
+	s.Equal([]string{"m1", "m3"}, s.handler.startedIDs())
 }
 
 func (s *ConflatingConsumerSuite) TestBusyEntityDoesNotHoldUpOthers() {
@@ -168,10 +192,10 @@ func (s *ConflatingConsumerSuite) TestLimitCapsEntitiesInFlight() {
 	s.handler.release("b1")
 }
 
-func (s *ConflatingConsumerSuite) TestEventsWithoutEntityAreNeitherSerializedNorConflated() {
+func (s *ConflatingConsumerSuite) TestEventsWithoutOrderingKeyAreNeitherSerializedNorConflated() {
 	s.handler.hold("x1", "x2")
-	s.send("x1", "")
-	s.send("x2", "")
+	s.sendOrdered("x1", "A", "")
+	s.sendOrdered("x2", "A", "")
 
 	s.awaitStarted("x1")
 	s.awaitStarted("x2")
@@ -208,4 +232,50 @@ func (s *ConflatingConsumerSuite) TestStopWaitsForRunningHandlers() {
 			return false
 		}
 	}, time.Second, time.Millisecond)
+}
+
+type StickyEntityConsumerSuite struct {
+	suite.Suite
+
+	handler  *gatedHandler
+	ch       chan AckableEventEnvelope
+	consumer *StickyEntityConsumer
+}
+
+func TestStickyEntityConsumerSuite(t *testing.T) { suite.Run(t, new(StickyEntityConsumerSuite)) }
+
+func (s *StickyEntityConsumerSuite) SetupTest() {
+	s.handler = newGatedHandler()
+	s.ch = make(chan AckableEventEnvelope)
+	s.consumer = NewStickyEntityConsumer(map[string]int{"sub": 4}, NopLogger)
+	s.consumer.Run(context.Background(), "sub", s.ch, s.handler.consume)
+}
+
+func (s *StickyEntityConsumerSuite) TearDownTest() {
+	s.consumer.Stop()
+}
+
+func (s *StickyEntityConsumerSuite) send(id, entityID, orderingKey string) {
+	s.ch <- AckableEventEnvelope{
+		EventEnvelope: EventEnvelope{
+			ID:          id,
+			EntityID:    entityID,
+			OrderingKey: orderingKey,
+		},
+	}
+}
+
+func (s *StickyEntityConsumerSuite) TestOneOrderingKeyKeepsItsEntitiesOnOneWorker() {
+	s.Require().NotEqual(hashEntityID("message-1")%4, hashEntityID("message-2")%4,
+		"the entity ids alone would pick different workers")
+	s.handler.hold("m1")
+	s.send("m1", "message-1", "chat")
+	s.Require().Eventually(func() bool { return s.handler.hasStarted("m1") }, time.Second, time.Millisecond)
+
+	s.send("m2", "message-2", "chat")
+	s.Never(func() bool { return s.handler.hasStarted("m2") }, 50*time.Millisecond, time.Millisecond, "m2 waits behind m1")
+
+	s.handler.release("m1")
+	s.Eventually(func() bool { return s.handler.hasStarted("m2") }, time.Second, time.Millisecond)
+	s.Equal([]string{"m1", "m2"}, s.handler.startedIDs())
 }

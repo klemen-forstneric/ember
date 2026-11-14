@@ -186,8 +186,9 @@ func (s *session) deliver(m kafka.Message) {
 
 	envelope := ember.AckableEventEnvelope{
 		EventEnvelope: ember.EventEnvelope{
-			ID:       msg.ID,
-			EntityID: msg.EntityID,
+			ID:          msg.ID,
+			EntityID:    msg.EntityID,
+			OrderingKey: msg.EntityID,
 			Event: &ember.MarshaledEvent{
 				Type: msg.Type,
 				Data: msg.Data,

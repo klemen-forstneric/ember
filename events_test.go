@@ -15,6 +15,15 @@ type fakeEvent struct {
 func (e fakeEvent) EntityID() string { return e.entityID }
 func (e fakeEvent) Type() string     { return e.typ }
 
+type orderedEvent struct {
+	entityID    string
+	orderingKey string
+}
+
+func (e orderedEvent) EntityID() string    { return e.entityID }
+func (e orderedEvent) Type() string        { return "Ordered" }
+func (e orderedEvent) OrderingKey() string { return e.orderingKey }
+
 func TestEventsEmitAndAll(t *testing.T) {
 	var buf Events
 	a := fakeEvent{entityID: "1", typ: "A"}

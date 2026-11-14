@@ -182,6 +182,38 @@ func (s *EventRepositorySuite) TestRowsWithoutPartitionBelongToPartitionZero() {
 	}
 }
 
+func (s *EventRepositorySuite) TestListUnpublishedKeepsTheOrderingKey() {
+	ctx := context.Background()
+	e := env("e1", "message-1", time.Unix(1_700_000_000, 0).UTC())
+	e.OrderingKey = "chat-1"
+	s.Require().NoError(s.repo.Save(ctx, []ember.EventEnvelope{e}))
+
+	got, err := s.repo.ListUnpublished(ctx, 0, 10)
+
+	s.Require().NoError(err)
+	s.Require().Len(got, 1)
+	s.Equal("chat-1", got[0].OrderingKey)
+	s.Equal("message-1", got[0].EntityID)
+}
+
+func (s *EventRepositorySuite) TestRowsWithoutOrderingKeyUseTheEntityID() {
+	ctx := context.Background()
+	// A row written before ordering keys: no ordering_key field at all.
+	_, err := s.repo.collection.InsertOne(ctx, bson.D{
+		{Key: "_id", Value: "legacy"}, {Key: "entity_id", Value: "A"}, {Key: "type", Value: "Created"},
+		{Key: "data", Value: bson.D{}}, {Key: "version", Value: 1}, {Key: "idx", Value: 0},
+		{Key: "partition", Value: 0}, {Key: "created_at", Value: time.Unix(1_700_000_000, 0).UTC()},
+		{Key: "published", Value: false},
+	})
+	s.Require().NoError(err)
+
+	got, err := s.repo.ListUnpublished(ctx, 0, 10)
+
+	s.Require().NoError(err)
+	s.Require().Len(got, 1)
+	s.Equal("A", got[0].OrderingKey)
+}
+
 func (s *EventRepositorySuite) TestOnePartitionByDefault() {
 	s.Equal(1, s.repo.Partitions())
 	s.Equal(1, NewEventRepository(s.repo.collection, WithPartitions(0)).Partitions())

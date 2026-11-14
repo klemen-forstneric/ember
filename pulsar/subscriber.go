@@ -101,8 +101,9 @@ func (s *Subscriber) Subscribe(ctx context.Context, name string) (<-chan ember.A
 
 					envelope := ember.AckableEventEnvelope{
 						EventEnvelope: ember.EventEnvelope{
-							ID:       m.ID,
-							EntityID: m.EntityID,
+							ID:          m.ID,
+							EntityID:    m.EntityID,
+							OrderingKey: msg.Key(),
 							Event: &ember.MarshaledEvent{
 								Type: m.Type,
 								Data: m.Data,

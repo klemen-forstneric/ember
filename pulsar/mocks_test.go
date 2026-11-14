@@ -113,8 +113,8 @@ type mockProducerRegistry struct {
 	mock.Mock
 }
 
-func (m *mockProducerRegistry) Get(ctx context.Context, eventType, entityID string) (producer, error) {
-	args := m.Called(ctx, eventType, entityID)
+func (m *mockProducerRegistry) Get(ctx context.Context, eventType string) (producer, error) {
+	args := m.Called(ctx, eventType)
 	var p producer
 	if v := args.Get(0); v != nil {
 		p = v.(producer)

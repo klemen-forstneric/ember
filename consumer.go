@@ -143,7 +143,7 @@ func (c *StickyEntityConsumer) Run(ctx context.Context, name string, ch <-chan A
 					return
 				}
 
-				idx := hashEntityID(envelope.EntityID) % uint32(numWorkers)
+				idx := hashEntityID(envelope.OrderingKey) % uint32(numWorkers)
 				select {
 				case workerCh[idx] <- envelope:
 				case <-ctx.Done():
@@ -169,7 +169,7 @@ func (c *StickyEntityConsumer) Stop() {
 	c.wg.Wait()
 }
 
-// ConflatingConsumer handles at most one event per entity at a time. Of the events that
+// ConflatingConsumer handles at most one event per ordering key at a time. Of the events that
 // arrive meanwhile it keeps only the newest and acks the rest unhandled, so use it only
 // when the handler acts on current state and handling the newest event covers the others.
 type ConflatingConsumer struct {
@@ -181,7 +181,7 @@ type ConflatingConsumer struct {
 	wg       sync.WaitGroup
 }
 
-// NewConflatingConsumer handles up to limit entities at once per subscription.
+// NewConflatingConsumer handles up to limit ordering keys at once per subscription.
 func NewConflatingConsumer(limit int, l LoggerCtx) *ConflatingConsumer {
 	return &ConflatingConsumer{
 		limit:    max(limit, 1),
@@ -231,7 +231,7 @@ func (c *ConflatingConsumer) Stop() {
 	c.wg.Wait()
 }
 
-// conflation is one subscription's state: the busy entities and the newest event waiting for each.
+// conflation is one subscription's state: the busy ordering keys and the newest event waiting for each.
 type conflation struct {
 	consumer *ConflatingConsumer
 	ctx      context.Context
@@ -240,16 +240,16 @@ type conflation struct {
 	slots    chan struct{}
 
 	mu      sync.Mutex
-	waiting map[string]*AckableEventEnvelope // busy entity → newest waiting event, nil when none
+	waiting map[string]*AckableEventEnvelope // busy ordering key → newest waiting event, nil when none
 }
 
-// dispatch starts e, or parks it behind its busy entity. It returns false once stopped.
+// dispatch starts e, or parks it behind its busy ordering key. It returns false once stopped.
 func (r *conflation) dispatch(e AckableEventEnvelope) bool {
-	if e.EntityID != "" {
+	if e.OrderingKey != "" {
 		r.mu.Lock()
-		prev, busy := r.waiting[e.EntityID]
+		prev, busy := r.waiting[e.OrderingKey]
 		if busy {
-			r.waiting[e.EntityID] = &e
+			r.waiting[e.OrderingKey] = &e
 			r.mu.Unlock()
 			if prev != nil {
 				r.consumer.logger.Debug(r.ctx, "Event superseded", "event_id", prev.ID, "by", e.ID, "subscription", r.name)
@@ -257,7 +257,7 @@ func (r *conflation) dispatch(e AckableEventEnvelope) bool {
 			}
 			return true
 		}
-		r.waiting[e.EntityID] = nil
+		r.waiting[e.OrderingKey] = nil
 		r.mu.Unlock()
 	}
 
@@ -274,26 +274,26 @@ func (r *conflation) dispatch(e AckableEventEnvelope) bool {
 	return true
 }
 
-// run handles e, then whatever event is waiting for its entity, until none is.
+// run handles e, then whatever event is waiting for its ordering key, until none is.
 func (r *conflation) run(e AckableEventEnvelope) {
 	defer r.consumer.wg.Done()
 	defer func() { <-r.slots }()
 
 	for {
 		r.consume(r.ctx, e)
-		if e.EntityID == "" {
+		if e.OrderingKey == "" {
 			return
 		}
 
 		r.mu.Lock()
-		next := r.waiting[e.EntityID]
+		next := r.waiting[e.OrderingKey]
 		if next == nil || r.stopped() {
 			// A waiting event left behind on shutdown stays unacked, so the broker redelivers it.
-			delete(r.waiting, e.EntityID)
+			delete(r.waiting, e.OrderingKey)
 			r.mu.Unlock()
 			return
 		}
-		r.waiting[e.EntityID] = nil
+		r.waiting[e.OrderingKey] = nil
 		r.mu.Unlock()
 		e = *next
 	}

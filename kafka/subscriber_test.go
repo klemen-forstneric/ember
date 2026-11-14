@@ -70,6 +70,7 @@ func (s *SubscriberSuite) TestForwardsStampsAndCommitsOnAck() {
 	select {
 	case env := <-out:
 		s.Equal("e1", env.EntityID)
+		s.Equal("e1", env.OrderingKey)
 		s.Equal(1, env.Metadata[ember.MetadataKeyCurrentDelivery])
 		s.Equal(5, env.Metadata[ember.MetadataKeyMaxDeliveries])
 		s.Equal("corr-1", env.Metadata[MetadataKeyCorrelationID])
