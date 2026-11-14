@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/klemen-forstneric/ember"
+	emberjson "github.com/klemen-forstneric/ember/json"
 )
 
 const testPulsarTimeout = 5 * time.Second
@@ -343,4 +344,78 @@ func TestKeySharedSurvivesConcurrentPublishers(t *testing.T) {
 	for entityID, seen := range owners {
 		require.Len(t, seen, 1, "entity %s was split across consumers %v", entityID, seen)
 	}
+}
+
+// bumped is the event seqEnvelope publishes.
+type bumped struct {
+	N int `json:"n"`
+}
+
+func (bumped) Type() string     { return "Bumped" }
+func (bumped) EntityID() string { return "" }
+
+// blockingSubscription closes started when it begins handling, then waits for release.
+type blockingSubscription struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (blockingSubscription) Name() string { return "stop-drain" }
+
+func (b blockingSubscription) Handle(context.Context, *ember.ReceivedEvent) error {
+	close(b.started)
+	<-b.release
+	return nil
+}
+
+func TestStopAcksTheEventItWasHandling(t *testing.T) {
+	client := connectTestPulsar(t)
+	topic := fmt.Sprintf("persistent://public/default/ember-stop-%d", time.Now().UnixNano())
+	consumers := NewConsumerRegistry(client, map[string][]pulsar.ConsumerOptions{
+		"stop-drain": {{
+			Topic:                       topic,
+			SubscriptionName:            "stop-drain",
+			Type:                        pulsar.Shared,
+			SubscriptionInitialPosition: pulsar.SubscriptionPositionEarliest,
+		}},
+	})
+	sub := blockingSubscription{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	s := ember.NewSubscriber(emberjson.NewEventMarshaler(&bumped{}), NewSubscriber(consumers, ember.NopLogger), ember.NewSerialConsumer(), ember.NopLogger)
+	require.NoError(t, s.Subscribe(context.Background(), sub))
+	producers := NewProducerRegistry(client, map[string]string{"Bumped": topic})
+	defer producers.Close()
+	require.NoError(t, NewPublisher(producers, 0).Publish(context.Background(), []ember.EventEnvelope{seqEnvelope("e1", 1)}))
+
+	select {
+	case <-sub.started:
+	case <-time.After(testPulsarTimeout):
+		t.Fatal("the event never reached the handler")
+	}
+	stopped := make(chan struct{})
+	go func() {
+		s.Stop()
+		close(stopped)
+	}()
+	time.Sleep(200 * time.Millisecond) // Stop is waiting on the handler
+	close(sub.release)
+	select {
+	case <-stopped:
+	case <-time.After(testPulsarTimeout):
+		t.Fatal("Stop did not return")
+	}
+
+	again, err := client.Subscribe(pulsar.ConsumerOptions{
+		Topic:            topic,
+		SubscriptionName: "stop-drain",
+		Type:             pulsar.Shared,
+	})
+	require.NoError(t, err)
+	defer again.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	msg, err := again.Receive(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded, "the event came back: %v", msg)
 }
