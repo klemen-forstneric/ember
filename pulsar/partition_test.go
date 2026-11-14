@@ -1,6 +1,7 @@
 package pulsar
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
@@ -15,12 +16,18 @@ func TestPartitionSuite(t *testing.T) {
 }
 
 func (s *PartitionSuite) TestNamesThePartitionOfTheOrderingKey() {
-	s.Equal("persistent://public/default/chat.ws-partition-210", Partition("persistent://public/default/chat.ws", "hello", 512))
+	s.Equal("persistent://public/default/chat.ws-partition-171", Partition("persistent://public/default/chat.ws", "hello", 512))
 }
 
-// The key's Java hashCode is negative. The Go client keeps all 32 bits; the Java client would pick partition 0.
-func (s *PartitionSuite) TestHashesAsTheGoClientDoes() {
-	s.Equal("chat.ws-partition-8", Partition("chat.ws", "polygenelubricants", 12))
+func (s *PartitionSuite) TestSpreadsKeysOverEveryPartition() {
+	counts := map[string]int{}
+	for i := range 6400 {
+		counts[Partition("chat.ws", fmt.Sprintf("chat-%d", i), 64)]++
+	}
+	s.Len(counts, 64)
+	for p, n := range counts {
+		s.Greater(n, 50, p)
+	}
 }
 
 func (s *PartitionSuite) TestTopicWithoutPartitionsIsItself() {
