@@ -193,3 +193,8 @@ func (m *mockConsumerRegistry) Release(subscription string) {
 func (m *mockConsumerRegistry) Close() error {
 	return m.Called().Error(0)
 }
+
+// partitions is the metadata of a topic with that many partitions.
+type partitions uint32
+
+func (p partitions) NumPartitions() uint32 { return uint32(p) }

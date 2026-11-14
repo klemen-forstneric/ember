@@ -3,6 +3,7 @@ package pulsar
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -36,6 +37,21 @@ func (s *ProducerRegistrySuite) TestCreatesKeyBasedBatchingProducers() {
 	s.Require().Len(opts, 1)
 	s.Equal("topic-a", opts[0].Topic)
 	s.Equal(pulsar.KeyBasedBatchBuilder, opts[0].BatcherBuilderType)
+}
+
+func (s *ProducerRegistrySuite) TestProducersSendAKeyToThePartitionPartitionNames() {
+	s.client.On("CreateProducer", mock.Anything).Return(nil, nil)
+
+	r := NewProducerRegistry(s.client, map[string]string{"Created": "topic-a"})
+	_, err := r.Get(context.Background(), "Created")
+	s.Require().NoError(err)
+
+	route := s.client.createProducerOptions()[0].MessageRouter
+	s.Require().NotNil(route)
+	for _, key := range []string{"chat-1", "chat-2", "4b3c1f0e-8a5d-4c2b-9e7f-1a2b3c4d5e6f"} {
+		p := route(&pulsar.ProducerMessage{Key: key}, partitions(64))
+		s.Equal(Partition("topic-a", key, 64), fmt.Sprintf("topic-a-partition-%d", p))
+	}
 }
 
 func (s *ProducerRegistrySuite) TestCachesOneProducerPerTopic() {
