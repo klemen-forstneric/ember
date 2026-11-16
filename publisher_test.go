@@ -33,11 +33,11 @@ func (s *PublisherSuite) TearDownTest() {
 }
 
 func (s *PublisherSuite) atLeastOncePublisher() *Publisher {
-	return NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.marshaler, AtLeastOnce(s.repo))
+	return NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.marshaler, WithAtLeastOnce(s.repo))
 }
 
 func (s *PublisherSuite) bestEffortPublisher() *Publisher {
-	return NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.marshaler, BestEffort(s.sink))
+	return NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.marshaler, WithBestEffort(s.sink))
 }
 
 func (s *PublisherSuite) TestAtLeastOncePersistsEnvelopes() {
@@ -143,8 +143,12 @@ func (s *PublisherSuite) TestBestEffortStageDefersDelivery() {
 	s.Require().NoError(d(s.ctx))
 }
 
-func (s *PublisherSuite) splitPublisher() *Publisher {
-	return NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.marshaler, Split(AtLeastOnce(s.repo), BestEffort(s.sink), fakeEvent{typ: "Frame"}))
+// mixedPublisher sends Frame events best effort and every other event through the outbox.
+func (s *PublisherSuite) mixedPublisher() *Publisher {
+	return NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.marshaler,
+		WithAtLeastOnce(s.repo),
+		WithBestEffort(s.sink, fakeEvent{typ: "Frame"}),
+	)
 }
 
 // marshals makes each event marshal to its own type.
@@ -163,7 +167,7 @@ func indexes(envs []EventEnvelope) []int {
 	return out
 }
 
-func (s *PublisherSuite) TestSplitStagesEachSideWithItsGuaranteeInEmitOrder() {
+func (s *PublisherSuite) TestEachEventIsStagedWithItsGuaranteeInEmitOrder() {
 	created := fakeEvent{entityID: "A", typ: "Created"}
 	frame := fakeEvent{entityID: "A", typ: "Frame"}
 	updated := fakeEvent{entityID: "A", typ: "Updated"}
@@ -172,7 +176,7 @@ func (s *PublisherSuite) TestSplitStagesEachSideWithItsGuaranteeInEmitOrder() {
 	s.repo.On("Save", mock.Anything, mock.Anything).Return(nil).Once().
 		Run(func(args mock.Arguments) { saved = args.Get(1).([]EventEnvelope) })
 
-	d, err := s.splitPublisher().stage(s.ctx, []staged{
+	d, err := s.mixedPublisher().stage(s.ctx, []staged{
 		{event: created, version: 1, index: 0},
 		{event: frame, version: 1, index: 1},
 		{event: updated, version: 1, index: 2},
@@ -189,39 +193,65 @@ func (s *PublisherSuite) TestSplitStagesEachSideWithItsGuaranteeInEmitOrder() {
 	s.Equal([]int{1}, indexes(published))
 }
 
-func (s *PublisherSuite) TestSplitWithoutListedEventsDefersNothing() {
+func (s *PublisherSuite) TestOnlyOutboxEventsDeferNothing() {
 	created := fakeEvent{entityID: "A", typ: "Created"}
 	s.marshals(created)
 	s.repo.On("Save", mock.Anything, mock.Anything).Return(nil).Once()
 
-	d, err := s.splitPublisher().stage(s.ctx, []staged{{event: created, version: 1}})
+	d, err := s.mixedPublisher().stage(s.ctx, []staged{{event: created, version: 1}})
 
 	s.Require().NoError(err)
 	s.Nil(d)
 }
 
-func (s *PublisherSuite) TestSplitWithOnlyListedEventsSkipsTheOutbox() {
+func (s *PublisherSuite) TestOnlyBestEffortEventsSkipTheOutbox() {
 	frame := fakeEvent{entityID: "A", typ: "Frame"}
 	s.marshals(frame)
 	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
 
-	s.Require().NoError(s.splitPublisher().Publish(s.ctx, frame))
+	s.Require().NoError(s.mixedPublisher().Publish(s.ctx, frame))
 
 	s.repo.AssertNotCalled(s.T(), "Save", mock.Anything, mock.Anything)
 }
 
-func (s *PublisherSuite) TestSplitOutboxErrorStagesNoDelivery() {
+func (s *PublisherSuite) TestAnOutboxErrorStagesNoDelivery() {
 	created := fakeEvent{entityID: "A", typ: "Created"}
 	frame := fakeEvent{entityID: "A", typ: "Frame"}
 	s.marshals(created, frame)
 	repoErr := errors.New("outbox down")
 	s.repo.On("Save", mock.Anything, mock.Anything).Return(repoErr)
 
-	d, err := s.splitPublisher().stage(s.ctx, []staged{{event: created, version: 1}, {event: frame, version: 1, index: 1}})
+	d, err := s.mixedPublisher().stage(s.ctx, []staged{{event: created, version: 1}, {event: frame, version: 1, index: 1}})
 
 	s.Require().ErrorIs(err, repoErr)
 	s.Nil(d)
 	s.sink.AssertNotCalled(s.T(), "Publish", mock.Anything, mock.Anything)
+}
+
+func (s *PublisherSuite) TestAnEventNoOptionCoversIsAnError() {
+	created := fakeEvent{entityID: "A", typ: "Created"}
+	s.marshals(created)
+	p := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.marshaler, WithBestEffort(s.sink, fakeEvent{typ: "Frame"}))
+
+	err := p.Publish(s.ctx, created)
+
+	s.Require().ErrorIs(err, ErrNoGuarantee)
+	s.Contains(err.Error(), "Created")
+}
+
+func (s *PublisherSuite) TestWiringMistakesPanic() {
+	frame := fakeEvent{typ: "Frame"}
+	newPublisher := func(opts ...PublisherOption) func() {
+		return func() { NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.marshaler, opts...) }
+	}
+
+	s.PanicsWithValue("ember: a Publisher needs a delivery guarantee", newPublisher())
+	s.PanicsWithValue("ember: event Frame has two delivery guarantees",
+		newPublisher(WithBestEffort(s.sink, frame, frame)))
+	s.PanicsWithValue("ember: event Frame has two delivery guarantees",
+		newPublisher(WithAtLeastOnce(s.repo, frame), WithBestEffort(s.sink, frame)))
+	s.PanicsWithValue("ember: two delivery guarantees cover every unlisted event",
+		newPublisher(WithAtLeastOnce(s.repo), WithBestEffort(s.sink)))
 }
 
 func (s *PublisherSuite) TestPublishStampsUnorderedLane() {

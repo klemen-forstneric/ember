@@ -27,7 +27,7 @@ type Recorder struct {
 func NewRecorder(events ...ember.Event) *Recorder {
 	m := json.NewEventMarshaler(events...)
 	r := &Recorder{marshaler: m}
-	r.publisher = ember.NewPublisher(&ider{}, ember.NopMetadataGetter{}, m, ember.BestEffort(r))
+	r.publisher = ember.NewPublisher(&ider{}, ember.NopMetadataGetter{}, m, ember.WithBestEffort(r))
 	return r
 }
 
