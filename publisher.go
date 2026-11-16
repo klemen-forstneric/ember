@@ -11,13 +11,12 @@ type IDer interface {
 	ID() string
 }
 
-// Publisher builds event envelopes and hands each to the guarantee its options
-// give its event.
+// Publisher builds event envelopes and hands each to the guarantee of the
+// option that covers its event.
 type Publisher struct {
-	builder    envelopeBuilder
-	guarantees []guarantee
-	byType     map[string]int // event type to its guarantee
-	fallback   int            // the guarantee of every unlisted event; -1 when there is none
+	builder  envelopeBuilder
+	listed   map[string]*PublisherOption // each listed event type to the option that lists it
+	unlisted *PublisherOption            // covers every event no option lists; nil when there is none
 }
 
 // NewPublisher delivers each event with the guarantee of the option that lists
@@ -28,32 +27,16 @@ func NewPublisher(i IDer, mg MetadataGetter, m EventMarshaler, opts ...Publisher
 	if len(opts) == 0 {
 		panic("ember: a Publisher needs a delivery guarantee")
 	}
-	p := &Publisher{
+	o := options(opts)
+	return &Publisher{
 		builder:  envelopeBuilder{ider: i, metadata: mg, marshaler: m},
-		byType:   map[string]int{},
-		fallback: -1,
+		listed:   o.listed(),
+		unlisted: o.unlisted(),
 	}
-	for idx, o := range opts {
-		p.guarantees = append(p.guarantees, o.guarantee)
-		if len(o.events) == 0 {
-			if p.fallback >= 0 {
-				panic("ember: two delivery guarantees cover every unlisted event")
-			}
-			p.fallback = idx
-			continue
-		}
-		for _, e := range o.events {
-			if _, listed := p.byType[e.Type()]; listed {
-				panic(fmt.Sprintf("ember: event %s has two delivery guarantees", e.Type()))
-			}
-			p.byType[e.Type()] = idx
-		}
-	}
-	return p
 }
 
-// stage stages each guarantee's events, in emit order, and returns one delivery
-// for every guarantee that defers one.
+// stage stages each option's events with its guarantee, in emit order, and
+// returns one delivery for every guarantee that defers one.
 func (p *Publisher) stage(ctx context.Context, events []staged) (delivery, error) {
 	if len(events) == 0 {
 		return nil, nil
@@ -63,24 +46,22 @@ func (p *Publisher) stage(ctx context.Context, events []staged) (delivery, error
 	if err != nil {
 		return nil, err
 	}
-	groups := make([][]EventEnvelope, len(p.guarantees))
+	var order []*PublisherOption
+	groups := map[*PublisherOption][]EventEnvelope{}
 	for i, e := range events {
-		idx, ok := p.byType[e.event.Type()]
-		if !ok {
-			if p.fallback < 0 {
-				return nil, fmt.Errorf("%w: %s", ErrNoGuarantee, e.event.Type())
-			}
-			idx = p.fallback
+		o, err := p.option(e.event)
+		if err != nil {
+			return nil, err
 		}
-		groups[idx] = append(groups[idx], envelopes[i])
+		if _, seen := groups[o]; !seen {
+			order = append(order, o)
+		}
+		groups[o] = append(groups[o], envelopes[i])
 	}
 
 	var deliveries []delivery
-	for idx, envs := range groups {
-		if len(envs) == 0 {
-			continue
-		}
-		d, err := p.guarantees[idx].stage(ctx, envs)
+	for _, o := range order {
+		d, err := o.guarantee.stage(ctx, groups[o])
 		if err != nil {
 			return nil, err
 		}
@@ -120,4 +101,49 @@ func (p *Publisher) Publish(ctx context.Context, events ...Event) error {
 		return nil
 	}
 	return d(ctx)
+}
+
+// option is the option that covers e: the one that lists it, else the unlisted one.
+func (p *Publisher) option(e Event) (*PublisherOption, error) {
+	if o, ok := p.listed[e.Type()]; ok {
+		return o, nil
+	}
+	if p.unlisted == nil {
+		return nil, fmt.Errorf("%w: %s", ErrNoGuarantee, e.Type())
+	}
+	return p.unlisted, nil
+}
+
+// options
+type options []PublisherOption
+
+// listed maps each event type an option lists to that option; it panics on a
+// type listed twice.
+func (o options) listed() map[string]*PublisherOption {
+	out := map[string]*PublisherOption{}
+	for i := range o {
+		for _, e := range o[i].events {
+			if _, twice := out[e.Type()]; twice {
+				panic(fmt.Sprintf("ember: event %s has two delivery guarantees", e.Type()))
+			}
+			out[e.Type()] = &o[i]
+		}
+	}
+	return out
+}
+
+// unlisted is the option that lists no events; nil when there is none. It
+// panics on two.
+func (o options) unlisted() *PublisherOption {
+	var out *PublisherOption
+	for i := range o {
+		if len(o[i].events) > 0 {
+			continue
+		}
+		if out != nil {
+			panic("ember: two delivery guarantees cover every unlisted event")
+		}
+		out = &o[i]
+	}
+	return out
 }
