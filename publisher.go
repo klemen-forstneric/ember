@@ -70,11 +70,8 @@ func (p *Publisher) stage(ctx context.Context, events []staged) (delivery, error
 		}
 	}
 
-	switch len(deliveries) {
-	case 0:
+	if len(deliveries) == 0 {
 		return nil, nil
-	case 1:
-		return deliveries[0], nil
 	}
 	return func(ctx context.Context) error {
 		var errs []error
