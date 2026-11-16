@@ -234,6 +234,40 @@ func (s *EntitySaverSuite) TestBestEffortDeliversAfterCommit() {
 	s.Equal(uint64(1), e.Version().Value())
 }
 
+// One save of entities whose events need different guarantees: the outbox events commit with the entities, and
+// the split-off events are delivered only after the commit.
+func (s *EntitySaverSuite) TestSplitOutboxInTheTxFramesAfterCommit() {
+	tx := &recordingTransactor{}
+	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, Split(AtLeastOnce(s.eventRepo), BestEffort(s.sink), fakeEvent{typ: "Frame"}))
+	saver := NewEntitySaver(publisher, tx, nil, Bind[*fakeEntity](s.entityRepo))
+	chat := newFakeEntity("1")
+	chat.Emit(fakeEvent{entityID: "1", typ: "Created"})
+	message := newFakeEntity("2")
+	message.Emit(fakeEvent{entityID: "2", typ: "Frame"})
+
+	s.entityRepo.On("Save", mock.Anything, chat, chat.Version().Inc()).Return(nil)
+	s.entityRepo.On("Save", mock.Anything, message, message.Version().Inc()).Return(nil)
+	s.eventMarsh.On("Marshal", mock.Anything, fakeEvent{entityID: "1", typ: "Created"}).
+		Return(&MarshaledEvent{Type: "Created", Data: []byte(`{}`)}, nil)
+	s.eventMarsh.On("Marshal", mock.Anything, fakeEvent{entityID: "2", typ: "Frame"}).
+		Return(&MarshaledEvent{Type: "Frame", Data: []byte(`{}`)}, nil)
+	s.eventRepo.On("Save", mock.Anything, mock.MatchedBy(func(envs []EventEnvelope) bool {
+		return len(envs) == 1 && envs[0].EntityID == "1"
+	})).Return(nil).Once().Run(func(mock.Arguments) {
+		s.False(tx.committed, "the outbox row is written inside the transaction")
+	})
+	s.sink.On("Publish", mock.Anything, mock.MatchedBy(func(envs []EventEnvelope) bool {
+		return len(envs) == 1 && envs[0].EntityID == "2"
+	})).Return(nil).Once().Run(func(mock.Arguments) {
+		s.True(tx.committed, "the frame is delivered after commit")
+	})
+
+	s.Require().NoError(saver.Save(s.ctx, chat, message))
+
+	s.Empty(chat.events().All())
+	s.Empty(message.events().All())
+}
+
 func (s *EntitySaverSuite) TestBestEffortCommitFailureDoesNotDeliver() {
 	publisher := NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.eventMarsh, BestEffort(s.sink))
 	saver := NewEntitySaver(publisher, s.tx, nil, Bind[*fakeEntity](s.entityRepo))

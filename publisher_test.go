@@ -143,6 +143,87 @@ func (s *PublisherSuite) TestBestEffortStageDefersDelivery() {
 	s.Require().NoError(d(s.ctx))
 }
 
+func (s *PublisherSuite) splitPublisher() *Publisher {
+	return NewPublisher(stubIDer{id: "evt-1"}, NopMetadataGetter{}, s.marshaler, Split(AtLeastOnce(s.repo), BestEffort(s.sink), fakeEvent{typ: "Frame"}))
+}
+
+// marshals makes each event marshal to its own type.
+func (s *PublisherSuite) marshals(events ...fakeEvent) {
+	for _, e := range events {
+		s.marshaler.On("Marshal", mock.Anything, e).Return(&MarshaledEvent{Type: e.typ, Data: []byte(`{}`)}, nil)
+	}
+}
+
+// indexes returns the emit indexes of envelopes, in the order given.
+func indexes(envs []EventEnvelope) []int {
+	var out []int
+	for _, e := range envs {
+		out = append(out, e.Index)
+	}
+	return out
+}
+
+func (s *PublisherSuite) TestSplitStagesEachSideWithItsGuaranteeInEmitOrder() {
+	created := fakeEvent{entityID: "A", typ: "Created"}
+	frame := fakeEvent{entityID: "A", typ: "Frame"}
+	updated := fakeEvent{entityID: "A", typ: "Updated"}
+	s.marshals(created, frame, updated)
+	var saved, published []EventEnvelope
+	s.repo.On("Save", mock.Anything, mock.Anything).Return(nil).Once().
+		Run(func(args mock.Arguments) { saved = args.Get(1).([]EventEnvelope) })
+
+	d, err := s.splitPublisher().stage(s.ctx, []staged{
+		{event: created, version: 1, index: 0},
+		{event: frame, version: 1, index: 1},
+		{event: updated, version: 1, index: 2},
+	})
+
+	s.Require().NoError(err)
+	s.Equal([]int{0, 2}, indexes(saved), "the rest goes to the outbox while staging")
+	s.Require().NotNil(d, "the frame waits for commit")
+	s.sink.AssertNotCalled(s.T(), "Publish", mock.Anything, mock.Anything)
+
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once().
+		Run(func(args mock.Arguments) { published = args.Get(1).([]EventEnvelope) })
+	s.Require().NoError(d(s.ctx))
+	s.Equal([]int{1}, indexes(published))
+}
+
+func (s *PublisherSuite) TestSplitWithoutListedEventsDefersNothing() {
+	created := fakeEvent{entityID: "A", typ: "Created"}
+	s.marshals(created)
+	s.repo.On("Save", mock.Anything, mock.Anything).Return(nil).Once()
+
+	d, err := s.splitPublisher().stage(s.ctx, []staged{{event: created, version: 1}})
+
+	s.Require().NoError(err)
+	s.Nil(d)
+}
+
+func (s *PublisherSuite) TestSplitWithOnlyListedEventsSkipsTheOutbox() {
+	frame := fakeEvent{entityID: "A", typ: "Frame"}
+	s.marshals(frame)
+	s.sink.On("Publish", mock.Anything, mock.Anything).Return(nil).Once()
+
+	s.Require().NoError(s.splitPublisher().Publish(s.ctx, frame))
+
+	s.repo.AssertNotCalled(s.T(), "Save", mock.Anything, mock.Anything)
+}
+
+func (s *PublisherSuite) TestSplitOutboxErrorStagesNoDelivery() {
+	created := fakeEvent{entityID: "A", typ: "Created"}
+	frame := fakeEvent{entityID: "A", typ: "Frame"}
+	s.marshals(created, frame)
+	repoErr := errors.New("outbox down")
+	s.repo.On("Save", mock.Anything, mock.Anything).Return(repoErr)
+
+	d, err := s.splitPublisher().stage(s.ctx, []staged{{event: created, version: 1}, {event: frame, version: 1, index: 1}})
+
+	s.Require().ErrorIs(err, repoErr)
+	s.Nil(d)
+	s.sink.AssertNotCalled(s.T(), "Publish", mock.Anything, mock.Anything)
+}
+
 func (s *PublisherSuite) TestPublishStampsUnorderedLane() {
 	evt1 := fakeEvent{entityID: "A", typ: "Created"}
 	evt2 := fakeEvent{entityID: "A", typ: "Updated"}
