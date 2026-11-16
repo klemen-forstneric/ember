@@ -14,7 +14,7 @@ func TestTypedStore(t *testing.T) {
 	e := newFakeEntity("one")
 	r.On("Get", mock.Anything, "one").Return(e, nil)
 	r.On("Save", mock.Anything, e, e.Version().Inc()).Return(nil)
-	p := NewPublisher(stubIDer{id: "event"}, NopMetadataGetter{}, &mockEventMarshaler{}, AtLeastOnce(&mockEventRepository{}))
+	p := NewPublisher(stubIDer{id: "event"}, NopMetadataGetter{}, &mockEventMarshaler{}, WithAtLeastOnce(&mockEventRepository{}))
 	s := NewEntityStore(r, p, NopTransactor, nil)
 	got, err := s.Get(context.Background(), "one")
 	require.NoError(t, err)

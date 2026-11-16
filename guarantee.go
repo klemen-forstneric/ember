@@ -6,29 +6,42 @@ import (
 )
 
 // ErrDeliveryFailed marks a delivery that failed after its transaction
-// committed. Reachable only under BestEffort.
+// committed. Reachable only under WithBestEffort.
 var ErrDeliveryFailed = errors.New("ember: event delivery failed after commit")
+
+// ErrNoGuarantee marks an event that no option of its Publisher covers.
+var ErrNoGuarantee = errors.New("ember: no delivery guarantee for event")
 
 // delivery is work that must run only after the transaction commits.
 type delivery func(ctx context.Context) error
 
-// Guarantee is the delivery guarantee a Publisher was built with. Sealed: only
-// AtLeastOnce and BestEffort implement it.
-type Guarantee interface {
+// guarantee is how a Publisher delivers some of its events. Sealed: only
+// WithAtLeastOnce and WithBestEffort make one.
+type guarantee interface {
 	// stage performs the guarantee's durable work inside the caller's
 	// transaction and returns any delivery deferred until after commit.
 	stage(ctx context.Context, envelopes []EventEnvelope) (delivery, error)
+}
+
+// PublisherOption gives a Publisher a delivery guarantee for the events it
+// lists, or, when it lists none, for every event no other option lists.
+type PublisherOption struct {
+	guarantee guarantee
+	events    []Event
 }
 
 type atLeastOnce struct {
 	repo EventRepository
 }
 
-// AtLeastOnce persists envelopes to the outbox inside the caller's transaction.
-// A relay is the sole publisher: PollingRelay for a table-backed outbox, or
-// postgres/wal.Relay for a WAL-backed one.
-func AtLeastOnce(r EventRepository) Guarantee {
-	return atLeastOnce{repo: r}
+// WithAtLeastOnce persists the events' envelopes to the outbox inside the
+// caller's transaction. A relay is the sole publisher: PollingRelay for a
+// table-backed outbox, or postgres/wal.Relay for a WAL-backed one.
+func WithAtLeastOnce(r EventRepository, events ...Event) PublisherOption {
+	return PublisherOption{
+		guarantee: atLeastOnce{repo: r},
+		events:    events,
+	}
 }
 
 func (g atLeastOnce) stage(ctx context.Context, envelopes []EventEnvelope) (delivery, error) {
@@ -39,13 +52,16 @@ type bestEffort struct {
 	sink Sink
 }
 
-// BestEffort persists nothing and pushes to the Sink after EntitySaver commits.
-// Pass every entity to a single Save call — wrapping Save in your own
-// transaction defers the commit past delivery, so a rollback leaves a
-// published event for state that never existed. A crash between commit and
+// WithBestEffort persists nothing and pushes the events to the Sink after
+// EntitySaver commits. Pass every entity to a single Save call — wrapping Save
+// in your own transaction defers the commit past delivery, so a rollback leaves
+// a published event for state that never existed. A crash between commit and
 // push loses the event.
-func BestEffort(s Sink) Guarantee {
-	return bestEffort{sink: s}
+func WithBestEffort(s Sink, events ...Event) PublisherOption {
+	return PublisherOption{
+		guarantee: bestEffort{sink: s},
+		events:    events,
+	}
 }
 
 func (g bestEffort) stage(ctx context.Context, envelopes []EventEnvelope) (delivery, error) {

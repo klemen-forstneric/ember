@@ -148,7 +148,7 @@ func TestSaveThroughRelayPreservesPerEntityOrder(t *testing.T) {
 		&seqIDer{},
 		ember.NopMetadataGetter{},
 		emberjson.NewEventMarshaler(&bumped{}),
-		ember.AtLeastOnce(eventRepo),
+		ember.WithAtLeastOnce(eventRepo),
 	)
 	saver := ember.NewEntitySaver(publisher, NewTransactor(client), nil,
 		ember.Bind[*counter](emberdoc.NewAdapter(entityRepo, counterMarshaler{})))

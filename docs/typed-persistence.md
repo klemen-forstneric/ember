@@ -28,10 +28,26 @@ retains the existing direct-save fast path; an adapter that writes several rows
 must make that individual operation atomic itself.
 
 `EntitySaver` owns version advancement, event staging, and event-buffer clearing.
-With `AtLeastOnce`, entity writes and outbox events commit together. If the saver
+Events under `WithAtLeastOnce` commit with the entity writes. If the saver
 joins a caller-owned transaction, its in-memory state is finalized before the
 outer commit; discard/reload affected entities after an outer rollback.
-`BestEffort` retains its existing caller-owned-transaction limitations.
+Events under `WithBestEffort` are delivered after the commit and keep the
+existing caller-owned-transaction limitations.
+
+A Publisher can give different events different guarantees, so one saver holds
+every entity type:
+
+```go
+publisher := ember.NewPublisher(ider, metadata, marshaler,
+	ember.WithAtLeastOnce(outbox),                      // every event not listed below
+	ember.WithBestEffort(sink, &MessageAdded{}, &NoticeAdded{}),
+)
+```
+
+An option that lists no events covers every event no other option lists; there
+can be at most one. Listing an event type twice, two such options, or no option
+at all panics in `NewPublisher`. Publishing an event no option covers fails
+with `ErrNoGuarantee`.
 
 ## Migrating document callers
 
