@@ -15,12 +15,13 @@ func (m *mockSink) Publish(ctx context.Context, envelopes []ember.EventEnvelope)
 }
 
 // mockLogger records level+msg per call so tests can assert logging without
-// pinning down every variadic kv.
+// pinning down every variadic kv. Info also passes its kvs, for the
+// "Published event" line.
 type mockLogger struct{ mock.Mock }
 
 func (m *mockLogger) Debug(ctx context.Context, msg string, kvs ...interface{}) { m.Called(msg) }
 
-func (m *mockLogger) Info(ctx context.Context, msg string, kvs ...interface{}) { m.Called(msg) }
+func (m *mockLogger) Info(ctx context.Context, msg string, kvs ...interface{}) { m.Called(msg, kvs) }
 
 func (m *mockLogger) Warn(ctx context.Context, msg string, kvs ...interface{}) { m.Called(msg) }
 

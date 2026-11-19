@@ -94,6 +94,41 @@ func (s *RetryingSinkSuite) TestPublishRetriesWholeBatch() {
 	s.sink.AssertNumberOfCalls(s.T(), "Publish", 2)
 }
 
+// publishedEventLog publishes one event with cfg and returns the key-values of
+// its "Published event" line.
+func (s *RetryingSinkSuite) publishedEventLog(cfg RetryingSinkConfig) []interface{} {
+	envs := envelopes()
+	s.sink.On("Publish", mock.Anything, envs).Return(nil).Once()
+	var kvs []interface{}
+	logger := &mockLogger{}
+	logger.On("Info", "Published event", mock.Anything).Once().Run(func(args mock.Arguments) {
+		kvs = args.Get(1).([]interface{})
+	})
+	r := NewRetryingSink(cfg, s.sink, logger)
+
+	err := r.Publish(s.ctx, envs)
+
+	s.Require().NoError(err)
+	logger.AssertExpectations(s.T())
+	return kvs
+}
+
+func (s *RetryingSinkSuite) TestPublishLeavesPayloadOutOfTheLogByDefault() {
+	kvs := s.publishedEventLog(fastConfig(3))
+
+	s.NotContains(kvs, "payload")
+	s.Contains(kvs, "e1", "the rest of the line is still logged")
+}
+
+func (s *RetryingSinkSuite) TestPublishLogsPayloadWhenAsked() {
+	cfg := fastConfig(3)
+	cfg.LogPayload = true
+
+	kvs := s.publishedEventLog(cfg)
+
+	s.Contains(kvs, "payload")
+}
+
 func (s *RetryingSinkSuite) TestPublishStopsAtMaxTries() {
 	envs := envelopes()
 	sinkErr := errors.New("down")

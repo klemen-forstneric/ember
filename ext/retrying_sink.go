@@ -17,6 +17,8 @@ type RetryingSinkConfig struct {
 	MaxInterval time.Duration
 	// MaxTries is the total number of attempts including the first. 1 disables retrying.
 	MaxTries int
+	// LogPayload adds each event's data to its "Published event" line.
+	LogPayload bool
 }
 
 const (
@@ -90,10 +92,12 @@ func (r *RetryingSink) Publish(ctx context.Context, envelopes []ember.EventEnvel
 	}
 
 	for _, e := range envelopes {
-		r.logger.Info(ctx, "Published event", "event_id", e.ID, "type", e.Event.Type,
-			"entity_id", e.EntityID, "payload", json.RawMessage(e.Event.Data),
-			"metadata", e.Metadata, "timestamp", e.Timestamp,
-			"lag", time.Since(e.Timestamp))
+		kvs := []interface{}{"event_id", e.ID, "type", e.Event.Type, "entity_id", e.EntityID,
+			"metadata", e.Metadata, "timestamp", e.Timestamp, "lag", time.Since(e.Timestamp)}
+		if r.config.LogPayload {
+			kvs = append(kvs, "payload", json.RawMessage(e.Event.Data))
+		}
+		r.logger.Info(ctx, "Published event", kvs...)
 	}
 	return nil
 }

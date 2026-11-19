@@ -16,6 +16,7 @@ type PollingRelayConfig struct {
 	BatchSize    int           // events fetched per round
 	LockKey      string        // redis efficiency-lock key
 	Retention    time.Duration // published_at + Retention → expires_at (TTL)
+	LogPayload   bool          // add each event's data to its "Published event" line
 	// PublishConcurrency caps how many entities of a round publish at once. An
 	// entity's events always go out together, in order, in one Publish call.
 	PublishConcurrency int
@@ -149,10 +150,12 @@ func (r *PollingRelay) publish(ctx context.Context, partition int) (int, error) 
 			}
 
 			for _, e := range es {
-				r.logger.Info(ctx, "Published event", "event_id", e.ID, "type", e.Event.Type,
-					"entity_id", e.EntityID, "payload", json.RawMessage(e.Event.Data),
-					"metadata", e.Metadata, "timestamp", e.Timestamp,
-					"lag", time.Since(e.Timestamp))
+				kvs := []interface{}{"event_id", e.ID, "type", e.Event.Type, "entity_id", e.EntityID,
+					"metadata", e.Metadata, "timestamp", e.Timestamp, "lag", time.Since(e.Timestamp)}
+				if r.cfg.LogPayload {
+					kvs = append(kvs, "payload", json.RawMessage(e.Event.Data))
+				}
+				r.logger.Info(ctx, "Published event", kvs...)
 			}
 			mu.Lock()
 			for _, e := range es {

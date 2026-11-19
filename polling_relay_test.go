@@ -130,6 +130,44 @@ func (s *PollingRelaySuite) TestPublishBatchFailingGroupMarksNothingInThatGroup(
 	s.repository.AssertNotCalled(s.T(), "MarkPublished", mock.Anything, mock.Anything, mock.Anything)
 }
 
+// publishedEventLog publishes one event with cfg and returns the key-values of
+// its "Published event" line.
+func (s *PollingRelaySuite) publishedEventLog(cfg PollingRelayConfig) []interface{} {
+	batch := []EventEnvelope{evt("e1", "A")}
+	s.repository.On("ListUnpublished", mock.Anything, 0, cfg.BatchSize).Return(batch, nil).Once()
+	s.sink.On("Publish", mock.Anything, batch).Return(nil).Once()
+	s.repository.On("MarkPublished", mock.Anything, []string{"e1"}, mock.Anything).Return(nil).Once()
+	var kvs []interface{}
+	logger := &mockLogger{}
+	logger.On("Info", "Published event", mock.Anything).Once().Run(func(args mock.Arguments) {
+		kvs = args.Get(1).([]interface{})
+	})
+	r, err := NewPollingRelay(s.repository, s.sink, s.locker, logger, cfg)
+	s.Require().NoError(err)
+
+	_, err = r.publish(context.Background(), 0)
+
+	s.Require().NoError(err)
+	logger.AssertExpectations(s.T())
+	return kvs
+}
+
+func (s *PollingRelaySuite) TestPublishLeavesPayloadOutOfTheLogByDefault() {
+	kvs := s.publishedEventLog(testRelayConfig())
+
+	s.NotContains(kvs, "payload")
+	s.Contains(kvs, "e1", "the rest of the line is still logged")
+}
+
+func (s *PollingRelaySuite) TestPublishLogsPayloadWhenAsked() {
+	cfg := testRelayConfig()
+	cfg.LogPayload = true
+
+	kvs := s.publishedEventLog(cfg)
+
+	s.Contains(kvs, "payload")
+}
+
 func (s *PollingRelaySuite) TestPublishSendsEntitiesConcurrently() {
 	batch := []EventEnvelope{evt("e1", "A"), evt("e2", "B")}
 	s.repository.On("ListUnpublished", mock.Anything, 0, 3).Return(batch, nil).Once()
