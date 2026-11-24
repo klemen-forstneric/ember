@@ -261,3 +261,19 @@ func (s *EntityRepositorySuite) TestVersionedUpdateCannotInsertMissingEntity() {
 	s.Require().NoError(s.repo.Save(ctx, marshaled("order", "missing", 0, `{}`)))
 	s.ErrorIs(s.repo.Save(ctx, marshaled("order", "missing", 0, `{}`)), ember.ErrVersionConflict)
 }
+
+// Pins the contract only: the DocumentDB write conflict does not reproduce on Mongo.
+func (s *EntityRepositorySuite) TestDuplicateCreateInsideTransactionConflicts() {
+	ctx := context.Background()
+	s.Require().NoError(s.repo.Save(ctx, marshaled("order", "1", 0, `{"n":"a"}`)))
+
+	tx := NewTransactor(s.repo.collection.Database().Client())
+	err := tx.WithinTx(ctx, func(ctx context.Context) error {
+		return s.repo.Save(ctx, marshaled("order", "1", 0, `{"n":"b"}`))
+	})
+	s.ErrorIs(err, ember.ErrVersionConflict)
+
+	got, err := s.repo.Get(ctx, "order", "1")
+	s.Require().NoError(err)
+	s.JSONEq(`{"n":"a"}`, string(got.Data), "the duplicate must not land")
+}

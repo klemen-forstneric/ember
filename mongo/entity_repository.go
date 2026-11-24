@@ -49,37 +49,36 @@ func (r *EntityRepository) Save(ctx context.Context, m *ember.MarshaledEntity) e
 		return err
 	}
 
-	// _id is absent, so an upsert that inserts gets a freshly generated ObjectId.
-	filter := bson.D{
-		{Key: "type", Value: m.Type},
-		{Key: "entity_id", Value: m.ID},
-		{Key: "version", Value: m.Version.Initial()},
-	}
-
-	replacement := document{
+	doc := document{
 		EntityID: m.ID,
 		Type:     m.Type,
 		Version:  m.Version.Value(),
 		Data:     body,
 	}
 
-	result, err := r.collection.ReplaceOne(
-		ctx,
-		filter,
-		replacement,
-		options.Replace().SetUpsert(m.Version.Initial() == 0),
-	)
+	// Insert, not upsert: DocumentDB reports a duplicate upsert in a transaction as a write conflict.
+	if m.Version.Initial() == 0 {
+		_, err := r.collection.InsertOne(ctx, doc)
+		if mongo.IsDuplicateKeyError(err) {
+			return ember.ErrVersionConflict
+		}
+		return err
+	}
 
-	// A duplicate initial insert conflicts with the type-scoped identity index.
-	// Nonzero expected versions update only; they must never recreate a missing entity.
+	filter := bson.D{
+		{Key: "type", Value: m.Type},
+		{Key: "entity_id", Value: m.ID},
+		{Key: "version", Value: m.Version.Initial()},
+	}
+
+	result, err := r.collection.ReplaceOne(ctx, filter, doc)
 	if mongo.IsDuplicateKeyError(err) {
 		return ember.ErrVersionConflict
 	}
-
 	if err != nil {
 		return err
 	}
-	if result.MatchedCount == 0 && result.UpsertedCount == 0 {
+	if result.MatchedCount == 0 {
 		return ember.ErrVersionConflict
 	}
 	return nil
